@@ -79,7 +79,7 @@ jobs:
         uses: sbt/setup-sbt@v1
 
       - name: Set up Coursier cache
-        uses: coursier/cache-action@v7
+        uses: coursier/cache-action@v8
 
       - name: Set up Node.js
         if: matrix.platform == 'js'
@@ -148,7 +148,7 @@ jobs:
         uses: sbt/setup-sbt@v1
 
       - name: Set up Coursier cache
-        uses: coursier/cache-action@v7
+        uses: coursier/cache-action@v8
 
       - name: Verify Source Formatting
         id: scalafmt
@@ -211,7 +211,7 @@ jobs:
         uses: sbt/setup-sbt@v1
 
       - name: Set up Coursier cache
-        uses: coursier/cache-action@v7
+        uses: coursier/cache-action@v8
 
       - name: Publish Release Artefacts (jvm/js/native)
         env:
