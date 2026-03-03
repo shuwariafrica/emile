@@ -194,7 +194,7 @@ jobs:
 
       - name: "Setup GPG Key and Agent"
         id: import_gpg
-        uses: crazy-max/ghaction-import-gpg@v6
+        uses: crazy-max/ghaction-import-gpg@v7
         with:
           gpg_private_key: ${{ secrets.SIGNING_KEY }}
           trust_level: 5
