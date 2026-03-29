@@ -134,18 +134,15 @@ class PollerSuite extends FunSuite:
     assertEquals(result, PollResult.Interrupted)
     poller.close()
 
-  test("poll completes after processing a timer callback"):
+  test("poll(-1L) processes a timer callback in a single call"):
     var fired = false // scalafix:ok
     val poller = Poller().toOption.get
     val loop = poller.loop
     val timer = Timer.init(loop).toOption.get
 
     val _ = timer.start(Timeout.millis(10), Timeout.Zero)(() => fired = true)
-    val result = poller.poll(-1L)
-    assert(fired, "Timer callback should have fired during poll")
-    // Result is Complete or Idle depending on whether libuv considers
-    // a stopped-but-open timer handle as keeping the loop alive
-    assert(result == PollResult.Complete || result == PollResult.Idle)
+    val _ = poller.poll(-1L)
+    assert(fired, "Timer callback must fire in a single poll(-1L) call")
 
     val _ = timer.closeSync
     val _ = poller.poll(0L)

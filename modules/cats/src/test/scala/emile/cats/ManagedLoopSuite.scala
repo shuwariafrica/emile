@@ -142,9 +142,8 @@ class ManagedLoopSuite extends EmileSuite:
         }
       } *> Eff.liftF[IO, EmileError, Unit](IO {
         val thread = threadRef.get()
-        // Give shutdown a moment to complete
-        thread.join(2000)
-        assert(!thread.isAlive, "Loop thread should have terminated")
+        thread.join(500)
+        assert(!thread.isAlive, "Loop thread should have terminated within 500ms")
       })
     }
   }

@@ -212,17 +212,8 @@ object ManagedLoop:
                         val task = taskQueue.poll(10, TimeUnit.MILLISECONDS)
                         if task != null then processTask(loop, task, running, asyncHandle)
 
-                    // Cleanup - close the async handle first
-                    val closeLatch = new CountDownLatch(1)
-                    asyncHandle.closeAsync(_ => closeLatch.countDown())
-
-                    // Keep running until async handle is closed
-                    while !asyncHandle.isClosing do
-                      val _ = loop.run(RunMode.NoWait)
-
-                    closeLatch.await()
-
-                    // Now drain remaining handles
+                    // Cleanup: close all handles and drain the loop
+                    asyncHandle.closeAsync(_ => ())
                     loop.walkAndClose()
                     while loop.isAlive do
                       val _ = loop.run(RunMode.NoWait)
@@ -261,30 +252,24 @@ object ManagedLoop:
         exec.cb(result)
 
       case ruc: Task.RunUntilComplete =>
-        // Run the loop processing I/O until only the async handle remains
-        runUntilUserHandlesDrained(loop, ruc.latch, asyncHandle)
+        runUntilUserHandlesDrained(loop, ruc.latch, asyncHandle, running)
 
       case Task.Shutdown =>
         running.set(false)
 
-  /** Run the loop until all user handles are closed. The async handle is excluded by unreffing it
-    * temporarily.
-    */
   private def runUntilUserHandlesDrained(
     loop: Loop,
     latch: CountDownLatch,
-    asyncHandle: Async[Open]
+    asyncHandle: Async[Open],
+    running: AtomicBoolean
   ): Unit =
-    // Temporarily unref the async handle so it doesn't keep the loop alive
     asyncHandle.unref
 
-    // Run the loop until it's no longer alive (no referenced handles)
-    while loop.isAlive do
+    // Run until no referenced user handles remain or shutdown requested
+    while loop.isAlive && running.get() do
       val _ = loop.run(RunMode.Once)
 
-    // Re-ref the async handle for normal operation
     asyncHandle.ref
-
     latch.countDown()
   end runUntilUserHandlesDrained
 
@@ -294,8 +279,11 @@ object ManagedLoop:
         managed.running.set(false)
         managed.taskQueue.put(Task.Shutdown)
         val _ = managed.asyncHandle.send
-        managed.thread.join(1000) // Wait up to 1 second
-        if managed.thread.isAlive then managed.thread.interrupt()
+        // Cooperative shutdown: running flag is checked in the main loop
+        // and in runUntilUserHandlesDrained. After the flag is set, the
+        // thread exits the main loop within ~10ms (queue poll timeout),
+        // runs walkAndClose to drain handles, and terminates.
+        managed.thread.join()
       }
     )
 
