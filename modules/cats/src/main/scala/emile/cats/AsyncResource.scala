@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Ali Rashid.
+ * Copyright 2025, 2026 Ali Rashid.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,47 +17,46 @@ package emile.cats
 
 import cats.effect.IO
 import cats.effect.Resource
+import cats.effect.std.Queue
+import cats.effect.std.unsafe.UnboundedQueue
 
 import boilerplate.effect.*
 import boilerplate.effect.Eff
 
 import emile.Async
 import emile.EmileError
-import emile.Loop
 import emile.Open
 
-/**
- * cats-effect Resource integration for Async handles.
- *
- * Async handles allow any thread to wake up the event loop and invoke
- * a callback on the loop thread. This is the primary mechanism for
- * thread-safe communication with the event loop.
- *
- * Requires an integrated loop (via EmileLoop.integrated) for proper async
- * callback processing during resource release.
- */
+/** cats-effect Resource integration for Async handles.
+  *
+  * All libuv operations are serialised through `EffAsync.onLoop` / `EffAsync.closeHandle` to
+  * prevent races with the shared event loop.
+  */
 object AsyncResource:
 
-  /** Helper to convert IO[Unit] finalizers to Eff context. */
-  private inline def liftFinalizer(async: Async[Open]): Eff[IO, EmileError, Unit] =
-    Eff.liftF[IO, EmileError, Unit](IO.async_ { cb =>
-      async.closeAsync(_ => cb(Right(())))
-    })
-
-  /**
-   * Create an async handle as a managed resource.
-   *
-   * The handle is closed asynchronously when the resource is released.
-   * The finalizer awaits the close callback before returning.
-   *
-   * @param callback The callback to invoke when the async is signaled
-   * @param loop The event loop (implicit) - should be an integrated loop
-   * @return Resource that acquires and safely releases an async handle with typed error channel
-   */
-  def make(callback: () => Unit)(using loop: Loop): Resource[Eff.Of[IO, EmileError], Async[Open]] =
+  /** Create an async handle as a managed resource with a raw callback.
+    *
+    * @param callback The callback to invoke when the async is signalled
+    */
+  def make(callback: () => Unit): Resource[Eff.Of[IO, EmileError], Async[Open]] =
     Resource.make(
-      acquire = LoopOwnership.ensureOwned(loop) *> Async.init(loop)(callback).eff[IO]
+      acquire = EffAsync.onLoop(loop => Async.init(loop)(callback))
     )(
-      release = liftFinalizer
+      release = h => EffAsync.closeHandle(h.closeAsync)
     )
+
+  /** Create an async handle with an IO-bridged notification queue.
+    *
+    * Each `send` on the returned handle offers a unit to the queue. Consumers observe sends via
+    * `queue.take` with no sleeps or polling.
+    *
+    * @return Resource providing (handle, queue) where queue receives notifications on each send
+    */
+  def withQueue: Resource[Eff.Of[IO, EmileError], (Async[Open], Queue[IO, Unit])] =
+    Resource
+      .eval(Eff.liftF[IO, EmileError, UnboundedQueue[IO, Unit]](Queue.unsafeUnbounded[IO, Unit]))
+      .flatMap { queue =>
+        make(() => queue.unsafeOffer(())).map(handle => (handle, queue: Queue[IO, Unit]))
+      }
+
 end AsyncResource

@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Ali Rashid.
+ * Copyright 2025, 2026 Ali Rashid.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,58 +17,49 @@ package emile.ipa
 
 import boilerplate.nullable.*
 
-/**
- * Socket address combining an IP address with a port number.
- *
- * This is the fundamental addressing type for TCP and UDP operations. It
- * supports both IPv4 and IPv6 addresses.
- *
- * == Construction ==
- *
- * {{{
- * // IPv4 socket address
- * val v4 = SocketAddress.v4(Ipv4Address.Loopback, Port(8080))
- *
- * // IPv6 socket address
- * val v6 = SocketAddress.v6(Ipv6Address.Loopback, Port(8080))
- *
- * // Parse from string
- * val parsed = SocketAddress.from("127.0.0.1:8080")
- * val parsedV6 = SocketAddress.from("[::1]:8080")
- * }}}
- *
- * == Convenience Constructors ==
- *
- * {{{
- * SocketAddress.localhost(Port(8080))   // 127.0.0.1:8080
- * SocketAddress.localhost6(Port(8080))  // [::1]:8080
- * SocketAddress.any(Port(8080))         // 0.0.0.0:8080
- * SocketAddress.any6(Port(8080))        // [::]:8080
- * }}}
- */
+/** Socket address combining an IP address with a port number.
+  *
+  * This is the fundamental addressing type for TCP and UDP operations. It supports both IPv4 and
+  * IPv6 addresses.
+  *
+  * ==Construction==
+  *
+  * {{{
+  * // IPv4 socket address
+  * val v4 = SocketAddress.v4(Ipv4Address.Loopback, Port(8080))
+  *
+  * // IPv6 socket address
+  * val v6 = SocketAddress.v6(Ipv6Address.Loopback, Port(8080))
+  *
+  * // Parse from string
+  * val parsed = SocketAddress.from("127.0.0.1:8080")
+  * val parsedV6 = SocketAddress.from("[::1]:8080")
+  * }}}
+  *
+  * ==Convenience Constructors==
+  *
+  * {{{
+  * SocketAddress.localhost(Port(8080))   // 127.0.0.1:8080
+  * SocketAddress.localhost6(Port(8080))  // [::1]:8080
+  * SocketAddress.any(Port(8080))         // 0.0.0.0:8080
+  * SocketAddress.any6(Port(8080))        // [::]:8080
+  * }}}
+  */
 enum SocketAddress:
-  /**
-   * IPv4 socket address.
-   *
-   * @param address
-   *   The IPv4 address
-   * @param port
-   *   The port number
-   */
+  /** IPv4 socket address.
+    *
+    * @param address The IPv4 address
+    * @param port The port number
+    */
   case V4(address: Ipv4Address, port: Port)
 
-  /**
-   * IPv6 socket address.
-   *
-   * @param address
-   *   The IPv6 address
-   * @param port
-   *   The port number
-   * @param flowInfo
-   *   IPv6 flow information (traffic class and flow label)
-   * @param scopeId
-   *   Scope identifier for link-local addresses
-   */
+  /** IPv6 socket address.
+    *
+    * @param address The IPv6 address
+    * @param port The port number
+    * @param flowInfo IPv6 flow information (traffic class and flow label)
+    * @param scopeId Scope identifier for link-local addresses
+    */
   case V6(address: Ipv6Address, port: Port, flowInfo: FlowInfo, scopeId: ScopeId)
 
 end SocketAddress
@@ -79,68 +70,50 @@ object SocketAddress:
   /** Wildcard IPv4 address on port 0. */
   val Wildcard: SocketAddress = V4(Ipv4Address.Wildcard, Port.Wildcard)
 
-  /**
-   * Create an IPv4 socket address.
-   *
-   * @param address
-   *   The IPv4 address
-   * @param port
-   *   The port number
-   * @return
-   *   The socket address
-   */
+  /** Create an IPv4 socket address.
+    *
+    * @param address The IPv4 address
+    * @param port The port number
+    * @return The socket address
+    */
   def v4(address: Ipv4Address, port: Port): SocketAddress = V4(address, port)
 
-  /**
-   * Create an IPv6 socket address with default flow info and scope ID.
-   *
-   * @param address
-   *   The IPv6 address
-   * @param port
-   *   The port number
-   * @return
-   *   The socket address
-   */
+  /** Create an IPv6 socket address with default flow info and scope ID.
+    *
+    * @param address The IPv6 address
+    * @param port The port number
+    * @return The socket address
+    */
   def v6(address: Ipv6Address, port: Port): SocketAddress =
     V6(address, port, FlowInfo.Default, ScopeId.Default)
 
-  /**
-   * Create an IPv6 socket address with explicit flow info and scope ID.
-   *
-   * @param address
-   *   The IPv6 address
-   * @param port
-   *   The port number
-   * @param flowInfo
-   *   The flow information
-   * @param scopeId
-   *   The scope identifier
-   * @return
-   *   The socket address
-   */
+  /** Create an IPv6 socket address with explicit flow info and scope ID.
+    *
+    * @param address The IPv6 address
+    * @param port The port number
+    * @param flowInfo The flow information
+    * @param scopeId The scope identifier
+    * @return The socket address
+    */
   def v6(
-      address: Ipv6Address,
-      port: Port,
-      flowInfo: FlowInfo,
-      scopeId: ScopeId
+    address: Ipv6Address,
+    port: Port,
+    flowInfo: FlowInfo,
+    scopeId: ScopeId
   ): SocketAddress = V6(address, port, flowInfo, scopeId)
 
-  /**
-   * Parse a socket address from string.
-   *
-   * Supports formats:
-   *   - IPv4: "192.168.1.1:8080"
-   *   - IPv6: "[::1]:8080" or "[2001:db8::1]:8080"
-   *
-   * @param value
-   *   The string to parse
-   * @return
-   *   Either an error or the parsed socket address
-   */
+  /** Parse a socket address from string.
+    *
+    * Supports formats:
+    *   - IPv4: "192.168.1.1:8080"
+    *   - IPv6: "[::1]:8080" or "[2001:db8::1]:8080"
+    *
+    * @param value The string to parse
+    * @return Either an error or the parsed socket address
+    */
   def from(value: String | Null): Either[AddressError, SocketAddress] =
     value.either(AddressError.InvalidSocketAddress("null", "null input")).flatMap { v =>
-      if v.isEmpty then
-        Left(AddressError.InvalidSocketAddress(v, "empty input"))
+      if v.isEmpty then Left(AddressError.InvalidSocketAddress(v, "empty input"))
       else if v.startsWith("[") then parseIpv6SocketAddress(v)
       else parseIpv4SocketAddress(v)
     }
@@ -150,37 +123,40 @@ object SocketAddress:
     if colonIndex < 0 then Left(AddressError.InvalidSocketAddress(value, "missing port separator ':'"))
     else
       val addressPart = value.substring(0, colonIndex)
-      val portPart    = value.substring(colonIndex + 1)
+      val portPart = value.substring(colonIndex + 1)
 
       for
         address <- Ipv4Address.from(addressPart).left.map { e =>
-          AddressError.InvalidSocketAddress(value, e.message)
-        }
+                     AddressError.InvalidSocketAddress(value, e.message)
+                   }
         port <- Port.from(portPart).left.map { e =>
-          AddressError.InvalidSocketAddress(value, e.message)
-        }
+                  AddressError.InvalidSocketAddress(value, e.message)
+                }
       yield V4(address, port)
+    end if
+  end parseIpv4SocketAddress
 
   private def parseIpv6SocketAddress(value: String)(using ScopeIdPlatform): Either[AddressError, SocketAddress] =
     // Format: [ipv6[%scope][;flow=<hex|dec>]]:port
     val closeBracket = value.indexOf(']')
-    if closeBracket < 0 then
-      Left(AddressError.InvalidSocketAddress(value, "missing closing bracket ']'"))
+    if closeBracket < 0 then Left(AddressError.InvalidSocketAddress(value, "missing closing bracket ']'"))
     else if closeBracket + 1 >= value.length || value.charAt(closeBracket + 1) != ':' then
       Left(AddressError.InvalidSocketAddress(value, "missing port separator ':' after ']'"))
     else
       val rawAddress = value.substring(1, closeBracket)
-      val portPart   = value.substring(closeBracket + 2)
+      val portPart = value.substring(closeBracket + 2)
 
       for
         (addressText, scopeId, flowInfo) <- decodeIpv6Meta(rawAddress, value)
         address <- Ipv6Address.from(addressText).left.map { e =>
-          AddressError.InvalidSocketAddress(value, e.message)
-        }
+                     AddressError.InvalidSocketAddress(value, e.message)
+                   }
         port <- Port.from(portPart).left.map { e =>
-          AddressError.InvalidSocketAddress(value, e.message)
-        }
+                  AddressError.InvalidSocketAddress(value, e.message)
+                }
       yield V6(address, port, flowInfo, scopeId)
+    end if
+  end parseIpv6SocketAddress
 
   private def decodeIpv6Meta(address: String, input: String)(using ScopeIdPlatform): Either[AddressError, (String, ScopeId, FlowInfo)] =
     val flowIndex = address.indexOf(";flow=")
@@ -198,22 +174,21 @@ object SocketAddress:
         val scopeRaw = scopePart.substring(percentIdx + 1)
         parseScopeId(scopeRaw, input).map(sid => (ipv6Text, sid, fi))
     }
+  end decodeIpv6Meta
 
   private def parseScopeId(raw: String, input: String)(using ScopeIdPlatform): Either[AddressError, ScopeId] =
-    if raw.isEmpty then
-      Left(AddressError.InvalidSocketAddress(input, "scope identifier is empty"))
+    if raw.isEmpty then Left(AddressError.InvalidSocketAddress(input, "scope identifier is empty"))
     else if raw.forall(_.isDigit) then
       try
         val value = java.lang.Long.parseUnsignedLong(raw)
-        if value < 0 || value > 0xffffffffL then
-          Left(AddressError.InvalidSocketAddress(input, s"scope identifier '$raw' out of range"))
+        if value < 0 || value > 0xffffffffL then Left(AddressError.InvalidSocketAddress(input, s"scope identifier '$raw' out of range"))
         else Right(ScopeId(value.toInt))
       catch
         case _: NumberFormatException =>
           Left(AddressError.InvalidSocketAddress(input, s"scope identifier '$raw' is not numeric"))
     else
       summon[ScopeIdPlatform].fromInterfaceName(raw) match
-        case Right(sid)  => Right(sid)
+        case Right(sid)   => Right(sid)
         case Left(reason) => Left(AddressError.InvalidSocketAddress(input, reason))
 
   private def parseFlowInfo(raw: String, input: String): Either[AddressError, FlowInfo] =
@@ -224,75 +199,56 @@ object SocketAddress:
         else (raw, 10)
       try
         val value = java.lang.Long.parseUnsignedLong(digits, base)
-        if value < 0 || value > 0xffffffffL then
-          Left(AddressError.InvalidSocketAddress(input, s"flow info '$raw' out of range"))
+        if value < 0 || value > 0xffffffffL then Left(AddressError.InvalidSocketAddress(input, s"flow info '$raw' out of range"))
         else Right(FlowInfo(value.toInt))
       catch
         case _: NumberFormatException =>
           Left(AddressError.InvalidSocketAddress(input, s"invalid flow info '$raw'"))
 
-  /**
-   * Loopback address for IPv4.
-   *
-   * Alias for [[localhost]] to match [[Ipv4Address.Loopback]] naming.
-   *
-   * @param port
-   *   The port number
-   * @return
-   *   127.0.0.1:port
-   */
+  /** Loopback address for IPv4.
+    *
+    * Alias for [[localhost]] to match [[Ipv4Address.Loopback]] naming.
+    *
+    * @param port The port number
+    * @return 127.0.0.1:port
+    */
   inline def loopback(port: Port): SocketAddress = localhost(port)
 
-  /**
-   * Loopback address for IPv6.
-   *
-   * Alias for [[localhost6]] to match [[Ipv6Address.Loopback]] naming.
-   *
-   * @param port
-   *   The port number
-   * @return
-   *   [::1]:port
-   */
+  /** Loopback address for IPv6.
+    *
+    * Alias for [[localhost6]] to match [[Ipv6Address.Loopback]] naming.
+    *
+    * @param port The port number
+    * @return [::1]:port
+    */
   inline def loopback6(port: Port): SocketAddress = localhost6(port)
 
-  /**
-   * Convenient localhost constructor for IPv4.
-   *
-   * @param port
-   *   The port number
-   * @return
-   *   127.0.0.1:port
-   */
+  /** Convenient localhost constructor for IPv4.
+    *
+    * @param port The port number
+    * @return 127.0.0.1:port
+    */
   inline def localhost(port: Port): SocketAddress = V4(Ipv4Address.Loopback, port)
 
-  /**
-   * Convenient localhost constructor for IPv6.
-   *
-   * @param port
-   *   The port number
-   * @return
-   *   [::1]:port
-   */
+  /** Convenient localhost constructor for IPv6.
+    *
+    * @param port The port number
+    * @return [::1]:port
+    */
   inline def localhost6(port: Port): SocketAddress = v6(Ipv6Address.Loopback, port)
 
-  /**
-   * Convenient any-interface constructor for IPv4.
-   *
-   * @param port
-   *   The port number
-   * @return
-   *   0.0.0.0:port
-   */
+  /** Convenient any-interface constructor for IPv4.
+    *
+    * @param port The port number
+    * @return 0.0.0.0:port
+    */
   inline def any(port: Port): SocketAddress = V4(Ipv4Address.Wildcard, port)
 
-  /**
-   * Convenient any-interface constructor for IPv6.
-   *
-   * @param port
-   *   The port number
-   * @return
-   *   [::]:port
-   */
+  /** Convenient any-interface constructor for IPv6.
+    *
+    * @param port The port number
+    * @return [::]:port
+    */
   inline def any6(port: Port): SocketAddress = v6(Ipv6Address.Wildcard, port)
 
   extension (addr: SocketAddress)
@@ -313,7 +269,7 @@ object SocketAddress:
 
     /** Fold over the address type. */
     def fold[A](fv4: (Ipv4Address, Port) => A)(
-        fv6: (Ipv6Address, Port, FlowInfo, ScopeId) => A
+      fv6: (Ipv6Address, Port, FlowInfo, ScopeId) => A
     ): A =
       addr match
         case V4(a, p)          => fv4(a, p)
@@ -339,7 +295,7 @@ object SocketAddress:
         out.append(':'): Unit
         p.writeTo(out): Unit
         out
-    
+
     /** String representation. */
     def show: String =
       val sb = new java.lang.StringBuilder
@@ -360,5 +316,6 @@ object SocketAddress:
     def withPort(newPort: Port): SocketAddress = addr match
       case V4(a, _)          => V4(a, newPort)
       case V6(a, _, fi, sid) => V6(a, newPort, fi, sid)
+  end extension
 
 end SocketAddress

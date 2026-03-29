@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Ali Rashid.
+ * Copyright 2025, 2026 Ali Rashid.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,15 +17,14 @@ package emile.ipa
 
 import munit.FunSuite
 
-/**
- * Platform-specific tests for Scala.js.
- *
- * Currently the JS platform has no platform-specific extensions.
- * These tests verify that the shared code works correctly on JS.
- *
- * Note: The shared tests run on all platforms. These tests are for any
- * JS-specific behavior or to verify JS-specific code paths.
- */
+/** Platform-specific tests for Scala.js.
+  *
+  * Currently the JS platform has no platform-specific extensions. These tests verify that the
+  * shared code works correctly on JS.
+  *
+  * Note: The shared tests run on all platforms. These tests are for any JS-specific behavior or to
+  * verify JS-specific code paths.
+  */
 class JsPlatformSpec extends FunSuite:
 
   private def expectRight[A](either: Either[?, A]): A =

@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Ali Rashid.
+ * Copyright 2025, 2026 Ali Rashid.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,86 +13,29 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package emile
+package emile.cats
 
-/**
- * Re-exports from emile-core and emile-ipa for emile-cats users.
- *
- * This allows users to import all necessary types from the cats package
- * without needing separate imports from emile-core or emile-ipa:
- *
- * {{{
- * import emile.cats.*
- *
- * // Now Loop, Tcp, Timer, SocketAddress, Port, etc. are available
- * }}}
- *
- * Uses Scala 3 `export` clauses for zero-overhead re-exports.
- */
-package object cats:
+/** Re-exports from emile-core and emile-ipa for emile-cats users.
+  *
+  * {{{
+  * import emile.cats.*
+  * }}}
+  */
 
-  // =========================================================================
-  // Core Handle Types and Companions
-  // =========================================================================
+// Core Handle Types and Companions
+export emile.{Loop, Tcp, Timer, Async, Poll, Signal, Dns}
 
-  export emile.{
-    Loop,
-    Tcp,
-    Timer,
-    Async,
-    Poll,
-    Signal,
-    Dns
-  }
+// Handle State Types
+export emile.{HandleState, Open, Closed}
 
-  // =========================================================================
-  // Handle State Types
-  // =========================================================================
+// Configuration Types
+export emile.{LoopConfig, TcpConfig, TcpKeepAlive, Timeout}
 
-  export emile.{
-    HandleState,
-    Open,
-    Closed
-  }
+// Error Types
+export emile.{EmileError, ErrorCode}
 
-  // =========================================================================
-  // Configuration Types
-  // =========================================================================
+// IPA Types (Addresses)
+export emile.ipa.{SocketAddress, Ipv4Address, Ipv6Address, Port, AddressError}
 
-  export emile.{
-    LoopConfig,
-    TcpConfig,
-    TcpKeepAlive,
-    Timeout
-  }
-
-  // =========================================================================
-  // Error Types
-  // =========================================================================
-
-  export emile.{
-    EmileError,
-    ErrorCode
-  }
-
-  // =========================================================================
-  // IPA Types (Addresses)
-  // =========================================================================
-
-  export emile.ipa.{
-    SocketAddress,
-    Ipv4Address,
-    Ipv6Address,
-    Port,
-    AddressError
-  }
-
-  // =========================================================================
-  // IPA Literals
-  // =========================================================================
-
-  /** Literal interpolators for compile-time validated addresses and ports. */
-  val literals: emile.ipa.literals.type = emile.ipa.literals
-
-end cats
-
+/** Literal interpolators for compile-time validated addresses and ports. */
+val literals: emile.ipa.literals.type = emile.ipa.literals

@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Ali Rashid.
+ * Copyright 2025, 2026 Ali Rashid.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,26 +15,31 @@
  */
 package emile.ipa
 
-/**
- * IPv6 flow information (traffic class and flow label).
- *
- * This 32-bit field contains:
- *   - Traffic class (8 bits): Similar to IPv4 TOS/DSCP
- *   - Flow label (20 bits): For QoS handling
- *
- * Used in IPv6 socket addresses for advanced traffic handling.
- */
+import boilerplate.*
+
+/** IPv6 flow information (traffic class and flow label).
+  *
+  * This 32-bit field contains:
+  *   - Traffic class (8 bits): Similar to IPv4 TOS/DSCP
+  *   - Flow label (20 bits): For QoS handling
+  *
+  * Instances may be constructed via [[FlowInfo$ FlowInfo]].
+  */
 opaque type FlowInfo = Int
 
-object FlowInfo:
-  given CanEqual[FlowInfo, FlowInfo] = CanEqual.derived
-  given Ordering[FlowInfo]           = Ordering.Int
+/** Provides factories and extension syntax for [[FlowInfo]]. */
+object FlowInfo extends OpaqueType[FlowInfo, Int], OpaqueType.Eq[FlowInfo]:
+  type Error = Nothing
+
+  given Ordering[FlowInfo] = Ordering.Int
+
+  inline def wrap(value: Int): FlowInfo = value
+  inline def unwrap(fi: FlowInfo): Int = fi
+  protected inline def validate(value: Int): Option[Nothing] = None
+  inline def apply(inline value: Int): FlowInfo = value
 
   /** Default flow info (zero). */
   val Default: FlowInfo = 0
-
-  /** Construct from raw 32-bit value. */
-  inline def apply(value: Int): FlowInfo = value
 
   extension (fi: FlowInfo)
     /** Get the underlying 32-bit value. */
@@ -48,26 +53,26 @@ object FlowInfo:
 
 end FlowInfo
 
-/**
- * IPv6 scope identifier for link-local addresses.
- *
- * This identifies the network interface for link-local destinations. On most
- * systems, the scope ID corresponds to the interface index.
- *
- * A scope ID of 0 means "unspecified" and is appropriate for non-link-local
- * addresses.
- */
+/** IPv6 scope identifier for link-local addresses.
+  *
+  * Identifies the network interface for link-local destinations. Instances may be constructed via
+  * [[ScopeId$ ScopeId]].
+  */
 opaque type ScopeId = Int
 
-object ScopeId:
-  given CanEqual[ScopeId, ScopeId] = CanEqual.derived
-  given Ordering[ScopeId]          = Ordering.Int
+/** Provides factories and extension syntax for [[ScopeId]]. */
+object ScopeId extends OpaqueType[ScopeId, Int], OpaqueType.Eq[ScopeId]:
+  type Error = Nothing
+
+  given Ordering[ScopeId] = Ordering.Int
+
+  inline def wrap(value: Int): ScopeId = value
+  inline def unwrap(sid: ScopeId): Int = sid
+  protected inline def validate(value: Int): Option[Nothing] = None
+  inline def apply(inline value: Int): ScopeId = value
 
   /** Default scope ID (zero - unspecified). */
   val Default: ScopeId = 0
-
-  /** Construct from raw 32-bit value. */
-  inline def apply(value: Int): ScopeId = value
 
   extension (sid: ScopeId)
     /** Get the underlying 32-bit value. */

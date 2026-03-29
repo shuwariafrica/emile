@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Ali Rashid.
+ * Copyright 2025, 2026 Ali Rashid.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,11 +20,10 @@ import munit.FunSuite
 import emile.Timeout
 import emile.Timer
 
-/**
- * Tests for Loop operations.
- *
- * These tests link to and execute the real libuv library.
- */
+/** Tests for Loop operations.
+  *
+  * These tests link to and execute the real libuv library.
+  */
 class LoopSuite extends FunSuite:
 // scalafix:off
 
@@ -100,10 +99,10 @@ class LoopSuite extends FunSuite:
       loop <- Loop.default
       _ <- loop.close // should be a no-op for default loop
       timer <- Timer.after(loop, Timeout.millis(25)) { () =>
-        fired = true
-        val _ = timerRef.close
-      }
-      _ = { timerRef = timer }
+                 fired = true
+                 val _ = timerRef.close
+               }
+      _ = timerRef = timer
       _ <- loop.run(RunMode.Default)
       _ <- loop.close
     yield fired

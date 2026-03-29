@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Ali Rashid.
+ * Copyright 2025, 2026 Ali Rashid.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,8 +21,7 @@ import scala.scalanative.unsafe.*
 
 import boilerplate.nullable.*
 
-import _root_.emile.unsafe.CallbackIdUtils
-import _root_.emile.unsafe.CallbackRegistry
+import _root_.emile.unsafe.CallbackStore
 import _root_.emile.unsafe.LibUV
 
 import emile.EmileError
@@ -32,35 +31,33 @@ import emile.HandleType
 import emile.Loop
 import emile.Open
 
-/**
- * Async handle for cross-thread event loop wakeup.
- *
- * Async handles allow any thread to wake up the event loop and invoke
- * a callback on the loop thread. This is the primary mechanism for
- * thread-safe communication with the event loop.
- *
- * '''Important:''' Multiple `send` calls may be coalesced into a single
- * callback invocation. The async mechanism is not a queue - it's a notification.
- *
- * == Phantom State Tracking ==
- *
- * Async uses phantom types to track handle state at compile time:
- * - `Async[Open]` - an active async handle that can send signals
- * - `Async[Closed]` - a closed async handle (close initiated)
- *
- * == Thread Safety ==
- * The `send` method is the only thread-safe operation on async handles.
- * All other handle operations must be performed from the loop thread.
- *
- * == Example ==
- * {{{
- * // Create async handle on main thread
- * val async = Async.init(loop)(() => println("Woken up!"))
- *
- * // From another thread, wake up the loop
- * async.foreach(_.send)
- * }}}
- */
+/** Async handle for cross-thread event loop wakeup.
+  *
+  * Async handles allow any thread to wake up the event loop and invoke a callback on the loop
+  * thread. This is the primary mechanism for thread-safe communication with the event loop.
+  *
+  * '''Important:''' Multiple `send` calls may be coalesced into a single callback invocation. The
+  * async mechanism is not a queue - it's a notification.
+  *
+  * ==Phantom State Tracking==
+  *
+  * Async uses phantom types to track handle state at compile time:
+  *   - `Async[Open]` - an active async handle that can send signals
+  *   - `Async[Closed]` - a closed async handle (close initiated)
+  *
+  * ==Thread Safety==
+  * The `send` method is the only thread-safe operation on async handles. All other handle
+  * operations must be performed from the loop thread.
+  *
+  * ==Example==
+  * {{{
+  * // Create async handle on main thread
+  * val async = Async.init(loop)(() => println("Woken up!"))
+  *
+  * // From another thread, wake up the loop
+  * async.foreach(_.send)
+  * }}}
+  */
 opaque type Async[S <: HandleState] = Ptr[Byte]
 
 object Async:
@@ -76,20 +73,19 @@ object Async:
   // toLibuvInline provides compile-time elimination when used directly
   private val UV_ASYNC = HandleType.toLibuvInline(HandleType.Async)
 
-  /**
-   * Initialise a new async handle with a callback.
-   *
-   * The callback will be invoked on the event loop thread whenever
-   * `send` is called from any thread.
-   *
-   * Unlike other handle types, the callback is provided at initialization
-   * time because async handles are always active once created.
-   * Returns an `Async[Open]` indicating the handle is ready for operations.
-   *
-   * @param loop The event loop to associate with this async handle
-   * @param callback The callback to invoke when the async is signaled
-   * @return Either an error or the initialised async handle
-   */
+  /** Initialise a new async handle with a callback.
+    *
+    * The callback will be invoked on the event loop thread whenever `send` is called from any
+    * thread.
+    *
+    * Unlike other handle types, the callback is provided at initialization time because async
+    * handles are always active once created. Returns an `Async[Open]` indicating the handle is
+    * ready for operations.
+    *
+    * @param loop The event loop to associate with this async handle
+    * @param callback The callback to invoke when the async is signaled
+    * @return Either an error or the initialised async handle
+    */
   def init(loop: Loop)(callback: () => Unit): Either[EmileError, Async[Open]] =
     val size = LibUV.uv_handle_size(UV_ASYNC)
     calloc(1L, size.toLong).either(EmileError.OutOfMemory).flatMap { handle =>
@@ -99,11 +95,10 @@ object Async:
         free(handle)
         Left(EmileError.fromErrorCode(ErrorCode(result)))
       else
-        // Now register callback and store ID in initialised handle
-        val callbackId = CallbackRegistry.registerLoop(loop.ptrUnsafe, callback)
-        CallbackIdUtils.setCallbackId(handle, callbackId)
+        CallbackStore.attach(handle, callback)
         Right(handle)
     }
+  end init
 
   /** Internal constructor from raw pointer. */
   private[emile] inline def apply[S <: HandleState](p: Ptr[Byte]): Async[S] = p
@@ -115,54 +110,37 @@ object Async:
 
   /** Extension methods only available on open async handles. */
   extension (async: Async[Open])
-    /**
-     * Send a signal to wake up the event loop.
-     *
-     * This is the only thread-safe operation on async handles. It can be
-     * called from any thread at any time.
-     *
-     * Multiple sends may be coalesced - if `send` is called multiple times
-     * before the event loop processes the signal, the callback may only be
-     * invoked once.
-     *
-     * This function is also async-signal-safe, meaning it can be called
-     * from signal handlers.
-     *
-     * @return Either an error or success
-     */
+    /** Send a signal to wake up the event loop.
+      *
+      * This is the only thread-safe operation on async handles. It can be called from any thread at
+      * any time.
+      *
+      * Multiple sends may be coalesced - if `send` is called multiple times before the event loop
+      * processes the signal, the callback may only be invoked once.
+      *
+      * This function is also async-signal-safe, meaning it can be called from signal handlers.
+      *
+      * @return Either an error or success
+      */
     def send: Either[EmileError, Unit] =
       val result = LibUV.uv_async_send(async)
       if result < 0 then Left(EmileError.fromErrorCode(ErrorCode(result)))
       else Right(())
 
-    /**
-     * Close the async handle with a callback.
-     *
-     * The callback will be invoked when the close is complete.
-     * After calling this, the handle should be considered closed.
-     *
-     * @param callback Callback invoked when close completes
-     */
+    /** Close the async handle with a callback.
+      *
+      * The callback will be invoked when the close is complete. After calling this, the handle
+      * should be considered closed.
+      *
+      * @param callback Callback invoked when close completes
+      */
     def closeAsync(callback: Either[EmileError, Unit] => Unit): Unit =
-      if LibUV.uv_is_closing(async) != 0 then
-        callback(Left(EmileError.AlreadyClosed))
-      else
-        val loopPtr = LibUV.uv_handle_get_loop(async)
-        // First, unregister the async callback
-        val existingId = CallbackIdUtils.getCallbackId(async)
-        if existingId != 0L then
-          val _ = CallbackRegistry.unregister(loopPtr, existingId)
-
-        // Now register the close callback and store its ID
-        val callbackId = CallbackRegistry.registerLoop(loopPtr, callback)
-        CallbackIdUtils.setCallbackId(async, callbackId)
-        LibUV.uv_close(async, Handle.closeCallback)
+      Handle.closeAsyncWithDetach(async, callback)
+  end extension
 
   /** Async callback that invokes the registered Scala callback. */
   private val asyncCallback: LibUV.AsyncCB = (handle: Ptr[Byte]) =>
-    val loopPtr = LibUV.uv_handle_get_loop(handle)
-    val callbackId = CallbackIdUtils.getCallbackId(handle)
-    CallbackRegistry.findAs[() => Unit](loopPtr, callbackId).foreach { callback =>
+    CallbackStore.get[() => Unit](handle).foreach { callback =>
       callback()
     }
 

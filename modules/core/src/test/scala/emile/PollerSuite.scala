@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Ali Rashid.
+ * Copyright 2025, 2026 Ali Rashid.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,9 +22,7 @@ import munit.FunSuite
 
 import emile.Timeout
 
-/**
- * Poller tests link against the real libuv runtime to validate idle/interrupt semantics.
- */
+/** Poller tests link against the real libuv runtime to validate idle/interrupt semantics. */
 class PollerSuite extends FunSuite:
 
   test("poll returns Idle on empty loop"):
@@ -32,8 +30,7 @@ class PollerSuite extends FunSuite:
     try
       val result = poller.poll(0)
       assertEquals(result, PollResult.Idle)
-    finally
-      poller.close()
+    finally poller.close()
 
   test("poll returns Complete when handles are active, then Idle after they drain"):
     val poller = Poller().toOption.get
@@ -60,10 +57,11 @@ class PollerSuite extends FunSuite:
     val ref = new AtomicReference[PollResult]()
     val latch = new CountDownLatch(1)
 
-    val t = new Thread(new Runnable:
-      def run(): Unit =
-        ref.set(poller.poll(-1L))
-        latch.countDown()
+    val t = new Thread(
+      new Runnable:
+        def run(): Unit =
+          ref.set(poller.poll(-1L))
+          latch.countDown()
     )
     t.start()
 
@@ -81,10 +79,11 @@ class PollerSuite extends FunSuite:
     val ref = new AtomicReference[PollResult]()
     val latch = new CountDownLatch(1)
 
-    val t = new Thread(new Runnable:
-      def run(): Unit =
-        ref.set(poller.poll(-1L))
-        latch.countDown()
+    val t = new Thread(
+      new Runnable:
+        def run(): Unit =
+          ref.set(poller.poll(-1L))
+          latch.countDown()
     )
     t.start()
     Thread.sleep(10) // allow poller to enter uv_run
@@ -105,10 +104,11 @@ class PollerSuite extends FunSuite:
     val ref = new AtomicReference[PollResult]()
     val latch = new CountDownLatch(1)
 
-    val t = new Thread(new Runnable:
-      def run(): Unit =
-        ref.set(poller.poll(-1L))
-        latch.countDown()
+    val t = new Thread(
+      new Runnable:
+        def run(): Unit =
+          ref.set(poller.poll(-1L))
+          latch.countDown()
     )
     t.start()
     Thread.sleep(10)
@@ -140,10 +140,14 @@ class PollerSuite extends FunSuite:
     val timer = Timer.init(loop).toOption.get
 
     val _ = timer.start(Timeout.millis(10), Timeout.Zero)(() => ())
+    // One-shot timer fires during UV_RUN_ONCE then becomes inactive;
+    // uv_run returns 0 when no active/referenced handles remain
     val result = poller.poll(-1L)
     assertEquals(result, PollResult.Idle)
 
     val _ = timer.closeSync
+    // Drain close callback
+    val _ = poller.poll(0L)
     poller.close()
 
 end PollerSuite

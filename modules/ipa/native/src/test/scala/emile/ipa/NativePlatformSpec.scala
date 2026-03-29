@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Ali Rashid.
+ * Copyright 2025, 2026 Ali Rashid.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,22 +32,21 @@ private object LibuvNet:
   def uv_ip6_addr(ip: CString, port: CInt, addr: Ptr[sockaddr_in6]): CInt = extern
   def uv_ip6_name(src: Ptr[sockaddr_in6], dst: CString, size: CSize): CInt = extern
 
-/**
- * Platform-specific tests for Native sockaddr conversions.
- *
- * These tests exercise actual native memory operations and verify correct
- * byte-order conversion (host <-> network order) for IPv4 and IPv6 addresses.
- *
- * Tests cover:
- * - Ipv4Address.toNetworkOrder: byte order conversion
- * - Ipv4Address.fillSockAddrIn: sockaddr_in population
- * - Ipv6Address.fillNetworkOrder: 16-byte buffer fill
- * - Ipv6Address.fillSockAddrIn6: sockaddr_in6 population
- * - SocketAddress.toSockAddr: allocation and population
- * - SocketAddress.sockAddrSize: size calculation
- * - native.fromSockAddr: parsing back to SocketAddress
- * - Full roundtrip tests
- */
+/** Platform-specific tests for Native sockaddr conversions.
+  *
+  * These tests exercise actual native memory operations and verify correct byte-order conversion
+  * (host <-> network order) for IPv4 and IPv6 addresses.
+  *
+  * Tests cover:
+  *   - Ipv4Address.toNetworkOrder: byte order conversion
+  *   - Ipv4Address.fillSockAddrIn: sockaddr_in population
+  *   - Ipv6Address.fillNetworkOrder: 16-byte buffer fill
+  *   - Ipv6Address.fillSockAddrIn6: sockaddr_in6 population
+  *   - SocketAddress.toSockAddr: allocation and population
+  *   - SocketAddress.sockAddrSize: size calculation
+  *   - native.fromSockAddr: parsing back to SocketAddress
+  *   - Full roundtrip tests
+  */
 class NativePlatformSpec extends FunSuite:
 // scalafix:off
 
@@ -63,7 +62,7 @@ class NativePlatformSpec extends FunSuite:
         var chosen: Option[(String, Int)] = None
         while cursor._1 != 0.toUInt && cursor._2 != null && chosen.isEmpty do
           val name = fromCString(cursor._2)
-          val idx  = cursor._1.toInt
+          val idx = cursor._1.toInt
           if idx > 0 && name.nonEmpty then chosen = Some((name, idx))
           cursor = cursor + 1
         chosen.getOrElse(fail("No network interfaces available for scope ID test"))
@@ -80,13 +79,13 @@ class NativePlatformSpec extends FunSuite:
     // Network order is big-endian
     // 192.168.1.1 = 0xC0A80101 in host order
     // In network order (big-endian), bytes are: C0, A8, 01, 01
-    val expected = htonl(0xC0A80101.toUInt)
+    val expected = htonl(0xc0a80101.toUInt)
     assertEquals(networkOrder, expected)
 
   test("Ipv4Address.toNetworkOrder for loopback"):
     val addr = Ipv4Address.Loopback // 127.0.0.1
     val networkOrder = addr.toNetworkOrder
-    val expected = htonl(0x7F000001.toUInt)
+    val expected = htonl(0x7f000001.toUInt)
     assertEquals(networkOrder, expected)
 
   test("Ipv4Address.toNetworkOrder for wildcard"):
@@ -98,7 +97,7 @@ class NativePlatformSpec extends FunSuite:
   test("Ipv4Address.toNetworkOrder for broadcast"):
     val addr = Ipv4Address.Broadcast // 255.255.255.255
     val networkOrder = addr.toNetworkOrder
-    val expected = htonl(0xFFFFFFFF.toUInt)
+    val expected = htonl(0xffffffff.toUInt)
     assertEquals(networkOrder, expected)
 
   // ============================================================
@@ -115,7 +114,7 @@ class NativePlatformSpec extends FunSuite:
 
       assertEquals(sockaddr.sin_family.toInt, AF_INET)
       assertEquals(ntohs(sockaddr.sin_port).toInt, 8080)
-      assertEquals(ntohl(sockaddr.sin_addr.s_addr).toInt, 0xC0A80164) // 192.168.1.100
+      assertEquals(ntohl(sockaddr.sin_addr.s_addr).toInt, 0xc0a80164) // 192.168.1.100
     }
 
   test("Ipv4Address.fillSockAddrIn for loopback"):
@@ -125,7 +124,7 @@ class NativePlatformSpec extends FunSuite:
 
       assertEquals(sockaddr.sin_family.toInt, AF_INET)
       assertEquals(ntohs(sockaddr.sin_port).toInt, 80)
-      assertEquals(ntohl(sockaddr.sin_addr.s_addr).toInt, 0x7F000001)
+      assertEquals(ntohl(sockaddr.sin_addr.s_addr).toInt, 0x7f000001)
     }
 
   // ============================================================
@@ -161,7 +160,7 @@ class NativePlatformSpec extends FunSuite:
       addr.fillNetworkOrder(buf)
 
       // All 0xFF
-      (0 until 16).foreach(i => assertEquals((buf(i) & 0xff), 255))
+      (0 until 16).foreach(i => assertEquals(buf(i) & 0xff, 255))
     }
 
   test("Ipv6Address.fillNetworkOrder preserves high/low bits"):
@@ -175,10 +174,10 @@ class NativePlatformSpec extends FunSuite:
 
       // Verify the high bits (first 8 bytes)
       // 2001:0db8:0000:0000 = 0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00
-      assertEquals((buf(0) & 0xff), 0x20)
-      assertEquals((buf(1) & 0xff), 0x01)
-      assertEquals((buf(2) & 0xff), 0x0d)
-      assertEquals((buf(3) & 0xff), 0xb8)
+      assertEquals(buf(0) & 0xff, 0x20)
+      assertEquals(buf(1) & 0xff, 0x01)
+      assertEquals(buf(2) & 0xff, 0x0d)
+      assertEquals(buf(3) & 0xff, 0xb8)
       (4 until 15).foreach(i => assertEquals(buf(i).toInt, 0))
       assertEquals(buf(15).toInt, 1)
     }
@@ -226,7 +225,7 @@ class NativePlatformSpec extends FunSuite:
       assertEquals(sockaddr.sa_family.toInt, AF_INET)
       val sin = sockaddr.asInstanceOf[Ptr[sockaddr_in]]
       assertEquals(ntohs(sin.sin_port).toInt, 8080)
-      assertEquals(ntohl(sin.sin_addr.s_addr).toInt, 0x7F000001)
+      assertEquals(ntohl(sin.sin_addr.s_addr).toInt, 0x7f000001)
     }
 
   test("SocketAddress.toSockAddr allocates and fills sockaddr_in6 for V6"):
@@ -260,7 +259,7 @@ class NativePlatformSpec extends FunSuite:
       val sin = alloc[sockaddr_in]()
       sin.sin_family = AF_INET.toUShort
       sin.sin_port = htons(3000.toUShort)
-      sin.sin_addr.s_addr = htonl(0xC0A80101.toUInt) // 192.168.1.1
+      sin.sin_addr.s_addr = htonl(0xc0a80101.toUInt) // 192.168.1.1
 
       val result = fromSockAddr(sin.asInstanceOf[Ptr[sockaddr]])
       assert(result.isRight)

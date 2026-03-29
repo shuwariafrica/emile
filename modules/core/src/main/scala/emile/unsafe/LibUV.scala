@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Ali Rashid.
+ * Copyright 2025, 2026 Ali Rashid.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,12 +17,11 @@ package emile.unsafe
 
 import scala.scalanative.unsafe.*
 
-/**
- * Low-level libuv FFI bindings.
- *
- * INTERNAL: These are direct C function bindings and should not be used
- * directly by library users. Use the safe wrappers in the main package.
- */
+/** Low-level libuv FFI bindings.
+  *
+  * INTERNAL: These are direct C function bindings and should not be used directly by library users.
+  * Use the safe wrappers in the main package.
+  */
 @link("uv")
 @extern
 private[emile] object LibUV:
@@ -204,11 +203,11 @@ private[emile] object LibUV:
 
   /** Write data to stream. */
   def uv_write(
-      req: Ptr[Byte],
-      handle: Ptr[Byte],
-      bufs: Ptr[Buffer],
-      nbufs: CUnsignedInt,
-      cb: WriteCB
+    req: Ptr[Byte],
+    handle: Ptr[Byte],
+    bufs: Ptr[Buffer],
+    nbufs: CUnsignedInt,
+    cb: WriteCB
   ): CInt = extern
 
   /** Try to write data synchronously. */
@@ -412,24 +411,23 @@ private[emile] object LibUV:
   // DNS functions (getaddrinfo)
   // ==========================================================================
 
-  /**
-   * Resolve a hostname asynchronously.
-   *
-   * @param loop Event loop
-   * @param req Request object (preallocated via uv_req_size(UV_GETADDRINFO))
-   * @param cb Callback invoked when resolution completes
-   * @param node Hostname to resolve (or null for wildcard)
-   * @param service Service name or port number (or null)
-   * @param hints addrinfo hints structure (or null)
-   * @return 0 on success, negative error code on failure
-   */
+  /** Resolve a hostname asynchronously.
+    *
+    * @param loop Event loop
+    * @param req Request object (preallocated via uv_req_size(UV_GETADDRINFO))
+    * @param cb Callback invoked when resolution completes
+    * @param node Hostname to resolve (or null for wildcard)
+    * @param service Service name or port number (or null)
+    * @param hints addrinfo hints structure (or null)
+    * @return 0 on success, negative error code on failure
+    */
   def uv_getaddrinfo(
-      loop: Ptr[Byte],
-      req: Ptr[Byte],
-      cb: GetAddrInfoCB,
-      node: CString,
-      service: CString,
-      hints: Ptr[Byte]
+    loop: Ptr[Byte],
+    req: Ptr[Byte],
+    cb: GetAddrInfoCB,
+    node: CString,
+    service: CString,
+    hints: Ptr[Byte]
   ): CInt = extern
 
   /** Free the addrinfo linked list returned by uv_getaddrinfo. */

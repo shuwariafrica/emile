@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Ali Rashid.
+ * Copyright 2025, 2026 Ali Rashid.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,22 +17,21 @@ package emile.ipa
 
 import munit.FunSuite
 
-/**
- * Tests for Ipv4Address opaque type.
- *
- * Tests cover:
- * - fromString / parse: string parsing with various formats
- * - fromOctetsRuntime: runtime octet validation
- * - fromBytes: byte array parsing
- * - fromInt: raw integer construction
- * - octet1-4: byte extraction
- * - toBytes: byte array extraction
- * - toInt: integer extraction
- * - show: string representation
- * - Boolean properties: isLoopback, isPrivate, isLinkLocal, isMulticast, isWildcard, isBroadcast
- * - Constants: Wildcard, Loopback, Broadcast
- * - Ordering: unsigned comparison
- */
+/** Tests for Ipv4Address opaque type.
+  *
+  * Tests cover:
+  *   - fromString / parse: string parsing with various formats
+  *   - fromOctetsRuntime: runtime octet validation
+  *   - fromBytes: byte array parsing
+  *   - fromInt: raw integer construction
+  *   - octet1-4: byte extraction
+  *   - toBytes: byte array extraction
+  *   - toInt: integer extraction
+  *   - show: string representation
+  *   - Boolean properties: isLoopback, isPrivate, isLinkLocal, isMulticast, isWildcard, isBroadcast
+  *   - Constants: Wildcard, Loopback, Broadcast
+  *   - Ordering: unsigned comparison
+  */
 class Ipv4AddressSpec extends FunSuite:
 // scalafix:off
 
@@ -175,7 +174,7 @@ class Ipv4AddressSpec extends FunSuite:
   // ============================================================
 
   test("Ipv4Address.fromInt creates address from integer"):
-    val addr = Ipv4Address.fromInt(0x7F000001) // 127.0.0.1
+    val addr = Ipv4Address.fromInt(0x7f000001) // 127.0.0.1
     assertEquals(addr.show, "127.0.0.1")
 
   test("Ipv4Address.fromInt handles full range"):
@@ -236,7 +235,7 @@ class Ipv4AddressSpec extends FunSuite:
 
   test("Ipv4Address.toInt returns expected value for loopback"):
     val addr = expectRight(Ipv4Address.from("127.0.0.1"))
-    assertEquals(addr.toInt, 0x7F000001)
+    assertEquals(addr.toInt, 0x7f000001)
 
   // ============================================================
   // show tests
@@ -440,7 +439,7 @@ val bad = ipv4"10.a${1}.1"
   test("Ipv4Address equality via different constructors"):
     val fromString = expectRight(Ipv4Address.from("192.168.1.1"))
     val fromBytes = expectRight(Ipv4Address.from(Array[Byte](192.toByte, 168.toByte, 1, 1)))
-    val fromInt = Ipv4Address.fromInt(0xC0A80101)
+    val fromInt = Ipv4Address.fromInt(0xc0a80101)
     assertEquals(fromString, fromBytes)
     assertEquals(fromString, fromInt)
 

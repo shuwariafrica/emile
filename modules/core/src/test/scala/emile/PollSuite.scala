@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Ali Rashid.
+ * Copyright 2025, 2026 Ali Rashid.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,12 +21,11 @@ import scala.scalanative.unsigned.*
 
 import munit.FunSuite
 
-/**
- * Tests for Poll handle operations.
- *
- * These tests link to and execute the real libuv library.
- * We use pipes for testing as they're portable across Unix systems.
- */
+/** Tests for Poll handle operations.
+  *
+  * These tests link to and execute the real libuv library. We use pipes for testing as they're
+  * portable across Unix systems.
+  */
 class PollSuite extends FunSuite:
 // scalafix:off
 
@@ -64,19 +63,19 @@ class PollSuite extends FunSuite:
       val result = for
         loop <- Loop.create
         poll <- Poll.init(loop, readFd)
-        _ = { pollRef = poll }
+        _ = pollRef = poll
         _ <- poll.start(PollEvent.Readable) { (status, events) =>
-          if status >= 0 && events.contains(PollEvent.Readable) then
-            readableDetected = true
-            val _ = pollRef.stop
-            val _ = pollRef.close
-        }
+               if status >= 0 && events.contains(PollEvent.Readable) then
+                 readableDetected = true
+                 val _ = pollRef.stop
+                 val _ = pollRef.close
+             }
         // Write to pipe to make read end readable
         _ = Zone {
-          val msg = stackalloc[Byte](1)
-          !msg = 'x'.toByte
-          val _ = unistd.write(writeFd, msg, 1.toCSize)
-        }
+              val msg = stackalloc[Byte](1)
+              !msg = 'x'.toByte
+              val _ = unistd.write(writeFd, msg, 1.toCSize)
+            }
         _ <- loop.run(RunMode.Default)
         _ <- loop.close
       yield ()
@@ -93,13 +92,13 @@ class PollSuite extends FunSuite:
       val result = for
         loop <- Loop.create
         poll <- Poll.init(loop, writeFd)
-        _ = { pollRef = poll }
+        _ = pollRef = poll
         _ <- poll.start(PollEvent.Writable) { (status, events) =>
-          if status >= 0 && events.contains(PollEvent.Writable) then
-            writableDetected = true
-            val _ = pollRef.stop
-            val _ = pollRef.close
-        }
+               if status >= 0 && events.contains(PollEvent.Writable) then
+                 writableDetected = true
+                 val _ = pollRef.stop
+                 val _ = pollRef.close
+             }
         _ <- loop.run(RunMode.Default)
         _ <- loop.close
       yield ()
@@ -116,15 +115,15 @@ class PollSuite extends FunSuite:
         loop <- Loop.create
         poll <- Poll.init(loop, readFd)
         _ <- poll.start(PollEvent.Readable) { (_, _) =>
-          callbackCount += 1
-        }
+               callbackCount += 1
+             }
         _ <- poll.stop
         // Write to pipe - but callback should not fire since we stopped
         _ = Zone {
-          val msg = stackalloc[Byte](1)
-          !msg = 'x'.toByte
-          val _ = unistd.write(writeFd, msg, 1.toCSize)
-        }
+              val msg = stackalloc[Byte](1)
+              !msg = 'x'.toByte
+              val _ = unistd.write(writeFd, msg, 1.toCSize)
+            }
         _ <- loop.run(RunMode.NoWait)
         _ = poll.close
         _ <- loop.run(RunMode.Default)
@@ -166,32 +165,47 @@ class PollSuite extends FunSuite:
       }
     }
 
-  test("restarting poll does not leak callbacks"):
-    import emile.unsafe.CallbackRegistry
+  test("restarting poll only fires the last registered callback"):
+    withPipe { (readFd, writeFd) =>
+      var fired1 = false
+      var fired2 = false
+      var fired3 = false
+      var pollRef: Poll[Open] = null.asInstanceOf[Poll[Open]]
 
-    withPipe { (readFd, _) =>
       val result = for
         loop <- Loop.create
         poll <- Poll.init(loop, readFd)
-        initialSize = CallbackRegistry.size(loop.ptrUnsafe)
-        _ <- poll.start(PollEvent.Readable)((_, _) => ())
-        sizeAfterFirst = CallbackRegistry.size(loop.ptrUnsafe)
-        _ <- poll.start(PollEvent.Writable)((_, _) => ())
-        sizeAfterSecond = CallbackRegistry.size(loop.ptrUnsafe)
-        _ <- poll.start(PollEvent.Readable, PollEvent.Writable)((_, _) => ())
-        sizeAfterThird = CallbackRegistry.size(loop.ptrUnsafe)
-        _ <- poll.stop
-        _ = poll.close
+        _ = pollRef = poll
+        // Start poll multiple times - only the last callback should fire
+        _ <- poll.start(PollEvent.Readable) { (_, _) =>
+               fired1 = true
+               val _ = pollRef.stop
+               val _ = pollRef.close
+             }
+        _ <- poll.start(PollEvent.Readable) { (_, _) =>
+               fired2 = true
+               val _ = pollRef.stop
+               val _ = pollRef.close
+             }
+        _ <- poll.start(PollEvent.Readable) { (_, _) =>
+               fired3 = true
+               val _ = pollRef.stop
+               val _ = pollRef.close
+             }
+        // Write to pipe to trigger readable event
+        _ = Zone {
+              val msg = stackalloc[Byte](1)
+              !msg = 'x'.toByte
+              val _ = unistd.write(writeFd, msg, 1.toCSize)
+            }
         _ <- loop.run(RunMode.Default)
         _ <- loop.close
-      yield (initialSize, sizeAfterFirst, sizeAfterSecond, sizeAfterThird)
+      yield ()
 
       assert(result.isRight, s"Expected Right, got $result")
-      result.foreach { case (initial, first, second, third) =>
-        assertEquals(first, initial + 1, "First start should add one callback")
-        assertEquals(second, initial + 1, "Second start should replace, not add")
-        assertEquals(third, initial + 1, "Third start should replace, not add")
-      }
+      assert(!fired1, "First callback should not fire after being replaced")
+      assert(!fired2, "Second callback should not fire after being replaced")
+      assert(fired3, "Only the last registered callback should fire")
     }
 
   test("PollEvent.fromLibuv converts bitmask correctly"):
@@ -209,5 +223,107 @@ class PollSuite extends FunSuite:
     assertEquals(PollEvent.combine(PollEvent.Writable), 2)
     assertEquals(PollEvent.combine(PollEvent.Readable, PollEvent.Writable), 3)
     assertEquals(PollEvent.combine(PollEvent.Readable, PollEvent.Writable, PollEvent.Disconnect), 7)
+
+  // ===========================================================================
+  // Lifecycle Safety Tests
+  //
+  // These tests verify poll handle lifecycle, particularly the stop/close
+  // interaction with callbacks. Poll handles don't have global state like
+  // signals, but still need proper cleanup of callbacks and file descriptors.
+  // ===========================================================================
+
+  test("Poll.closeAsync fires callback after handle is fully closed"):
+    withPipe { (readFd, _) =>
+      var closeCallbackFired = false
+
+      val result = for
+        loop <- Loop.create
+        poll <- Poll.init(loop, readFd)
+        _ <- poll.start(PollEvent.Readable)((_, _) => ())
+        // Stop before close (defensive pattern matching Signal/Timer)
+        _ <- poll.stop
+        _ = poll.closeAsync(_ => closeCallbackFired = true)
+        _ <- loop.run(RunMode.Default)
+        _ <- loop.close
+      yield ()
+
+      assert(result.isRight, s"Expected Right, got $result")
+      assert(closeCallbackFired, "Close callback must fire")
+    }
+
+  test("Rapid poll create/stop/close does not corrupt state"):
+    // Stress test - rapidly create, start, stop, and close polls
+    val iterations = 20
+    var closeCount = 0
+
+    val result = for
+      loop <- Loop.create
+      _ <- (0 until iterations).foldLeft(Right(()): Either[EmileError, Unit]) { (acc, _) =>
+             acc.flatMap { _ =>
+               withPipe { (readFd, _) =>
+                 for
+                   poll <- Poll.init(loop, readFd)
+                   _ <- poll.start(PollEvent.Readable)((_, _) => ())
+                   _ <- poll.stop
+                   _ = poll.closeAsync(_ => closeCount += 1)
+                   _ <- loop.run(RunMode.NoWait)
+                 yield ()
+               }
+             }
+           }
+      _ <- loop.run(RunMode.Default)
+      _ <- loop.close
+    yield closeCount
+
+    assert(result.isRight, s"Expected Right, got $result")
+    result.foreach(count => assertEquals(count, iterations, s"All $iterations close callbacks should fire"))
+
+  test("Poll sequential fd reuse works correctly"):
+    // Tests that closing a poll on an fd allows creating a new poll on a new fd
+    withPipe { (readFd1, writeFd1) =>
+      withPipe { (readFd2, writeFd2) =>
+        var callback1Fired = false
+        var callback2Fired = false
+        var poll1Ref: Poll[Open] = null.asInstanceOf[Poll[Open]]
+        var poll2Ref: Poll[Open] = null.asInstanceOf[Poll[Open]]
+
+        val result = for
+          loop <- Loop.create
+          // First poll
+          poll1 <- Poll.init(loop, readFd1)
+          _ = poll1Ref = poll1
+          _ <- poll1.start(PollEvent.Readable) { (_, _) =>
+                 callback1Fired = true
+                 val _ = poll1Ref.stop
+                 val _ = poll1Ref.close
+               }
+          _ = Zone {
+                val msg = stackalloc[Byte](1)
+                !msg = 'a'.toByte
+                val _ = unistd.write(writeFd1, msg, 1.toCSize)
+              }
+          _ <- loop.run(RunMode.Default)
+          // Second poll on different fd
+          poll2 <- Poll.init(loop, readFd2)
+          _ = poll2Ref = poll2
+          _ <- poll2.start(PollEvent.Readable) { (_, _) =>
+                 callback2Fired = true
+                 val _ = poll2Ref.stop
+                 val _ = poll2Ref.close
+               }
+          _ = Zone {
+                val msg = stackalloc[Byte](1)
+                !msg = 'b'.toByte
+                val _ = unistd.write(writeFd2, msg, 1.toCSize)
+              }
+          _ <- loop.run(RunMode.Default)
+          _ <- loop.close
+        yield ()
+
+        assert(result.isRight, s"Expected Right, got $result")
+        assert(callback1Fired, "First poll callback should fire")
+        assert(callback2Fired, "Second poll callback should fire")
+      }
+    }
 
 end PollSuite

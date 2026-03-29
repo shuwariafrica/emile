@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Ali Rashid.
+ * Copyright 2025, 2026 Ali Rashid.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,17 +17,25 @@ package emile
 
 import scala.annotation.targetName
 
-/**
- * Timeout duration in milliseconds for timer operations.
- *
- * This is a zero-cost wrapper around Long for type safety. Named `Timeout`
- * to avoid collision with `scala.concurrent.duration.Duration`.
- */
+import boilerplate.*
+
+/** Timeout duration in milliseconds for timer operations.
+  *
+  * Zero-cost wrapper around Long for type safety. Instances may be constructed via
+  * [[Timeout$ Timeout]].
+  */
 opaque type Timeout = Long
 
-object Timeout:
-  given CanEqual[Timeout, Timeout] = CanEqual.derived
+/** Provides factories and extension syntax for [[Timeout]]. */
+object Timeout extends OpaqueType[Timeout, Long], OpaqueType.Eq[Timeout]:
+  type Error = Nothing
+
   given Ordering[Timeout] = Ordering.Long
+
+  inline def wrap(value: Long): Timeout = value
+  inline def unwrap(value: Timeout): Long = value
+  protected inline def validate(value: Long): Option[Nothing] = None
+  inline def apply(inline value: Long): Timeout = value
 
   /** Construct timeout from milliseconds. */
   inline def millis(ms: Long): Timeout = ms
@@ -51,28 +59,20 @@ object Timeout:
     /** Get the timeout in seconds (truncated). */
     inline def toSeconds: Long = t / 1000L
 
-    /** Add two timeouts. */
     @targetName("plus")
     inline def +(other: Timeout): Timeout = t + other
 
-    /** Subtract a timeout. */
     @targetName("minus")
     inline def -(other: Timeout): Timeout = t - other
 
-    /** Multiply by a factor. */
     @targetName("times")
     inline def *(factor: Long): Timeout = t * factor
 
-    /** Divide by a divisor. */
     @targetName("div")
     inline def /(divisor: Long): Timeout = t / divisor
 
-    /** Check if timeout is zero. */
     inline def isZero: Boolean = t == 0L
-
-    /** Check if timeout is positive. */
     inline def isPositive: Boolean = t > 0L
-
-    /** Check if timeout is negative. */
     inline def isNegative: Boolean = t < 0L
+  end extension
 end Timeout

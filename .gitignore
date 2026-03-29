@@ -1,4 +1,10 @@
 .*
 !.github/
+!.gitattributes
+!.gitignore
+!.scalafix.conf
+!.scalafmt.conf
 target/
 metals.sbt
+*.md
+!README.md

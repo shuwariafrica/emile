@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Ali Rashid.
+ * Copyright 2025, 2026 Ali Rashid.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,21 +22,20 @@ import java.net.InetSocketAddress
 
 import munit.FunSuite
 
-/**
- * Platform-specific tests for JVM InetAddress conversions.
- *
- * These tests exercise actual JVM networking classes and verify correct
- * conversion between emile-ipa types and java.net types.
- *
- * Tests cover:
- * - Ipv4Address.toInetAddress: conversion to Inet4Address
- * - Ipv6Address.toInetAddress: conversion to Inet6Address
- * - SocketAddress.toInetSocketAddress: conversion to InetSocketAddress
- * - jvm.fromInet4Address: parsing from Inet4Address
- * - jvm.fromInet6Address: parsing from Inet6Address
- * - jvm.fromInetSocketAddress: parsing from InetSocketAddress
- * - Full roundtrip tests
- */
+/** Platform-specific tests for JVM InetAddress conversions.
+  *
+  * These tests exercise actual JVM networking classes and verify correct conversion between
+  * emile-ipa types and java.net types.
+  *
+  * Tests cover:
+  *   - Ipv4Address.toInetAddress: conversion to Inet4Address
+  *   - Ipv6Address.toInetAddress: conversion to Inet6Address
+  *   - SocketAddress.toInetSocketAddress: conversion to InetSocketAddress
+  *   - jvm.fromInet4Address: parsing from Inet4Address
+  *   - jvm.fromInet6Address: parsing from Inet6Address
+  *   - jvm.fromInetSocketAddress: parsing from InetSocketAddress
+  *   - Full roundtrip tests
+  */
 class JvmPlatformSpec extends FunSuite:
 // scalafix:off
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Ali Rashid.
+ * Copyright 2025, 2026 Ali Rashid.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,13 +17,12 @@ package emile.ipa
 
 import munit.FunSuite
 
-/**
- * Tests for FlowInfo and ScopeId opaque types.
- *
- * Tests cover:
- * - FlowInfo: apply, value, trafficClass, flowLabel, Default
- * - ScopeId: apply, value, isDefault, Default
- */
+/** Tests for FlowInfo and ScopeId opaque types.
+  *
+  * Tests cover:
+  *   - FlowInfo: apply, value, trafficClass, flowLabel, Default
+  *   - ScopeId: apply, value, isDefault, Default
+  */
 class Ipv6MetadataSpec extends FunSuite:
 
   // ============================================================
@@ -44,23 +43,23 @@ class Ipv6MetadataSpec extends FunSuite:
   test("FlowInfo.trafficClass extracts upper 8 bits of 28 significant bits"):
     // Traffic class is in bits 20-27 (upper 8 bits of the 28-bit flow info)
     // Format: TTTTTTTT_LLLLLLLL_LLLLLLLL_LLLL (T=traffic class, L=flow label)
-    val fi = FlowInfo(0x0AB00000) // Traffic class = 0xAB, flow label = 0
-    assertEquals(fi.trafficClass, 0xAB)
+    val fi = FlowInfo(0x0ab00000) // Traffic class = 0xAB, flow label = 0
+    assertEquals(fi.trafficClass, 0xab)
 
   test("FlowInfo.trafficClass extracts correctly with flow label"):
-    val fi = FlowInfo(0x0FF12345) // Traffic class = 0xFF, flow label = 0x12345
-    assertEquals(fi.trafficClass, 0xFF)
+    val fi = FlowInfo(0x0ff12345) // Traffic class = 0xFF, flow label = 0x12345
+    assertEquals(fi.trafficClass, 0xff)
 
   test("FlowInfo.flowLabel extracts lower 20 bits"):
-    val fi = FlowInfo(0x000FFFFF) // Flow label = max 20-bit value
-    assertEquals(fi.flowLabel, 0xFFFFF)
+    val fi = FlowInfo(0x000fffff) // Flow label = max 20-bit value
+    assertEquals(fi.flowLabel, 0xfffff)
 
   test("FlowInfo.flowLabel extracts correctly with traffic class"):
-    val fi = FlowInfo(0x0AB12345) // Traffic class = 0xAB, flow label = 0x12345
+    val fi = FlowInfo(0x0ab12345) // Traffic class = 0xAB, flow label = 0x12345
     assertEquals(fi.flowLabel, 0x12345)
 
   test("FlowInfo.flowLabel for zero"):
-    val fi = FlowInfo(0xFFF00000) // Any traffic class, flow label = 0
+    val fi = FlowInfo(0xfff00000) // Any traffic class, flow label = 0
     assertEquals(fi.flowLabel, 0)
 
   test("FlowInfo equality"):

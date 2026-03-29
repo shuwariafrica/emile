@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Ali Rashid.
+ * Copyright 2025, 2026 Ali Rashid.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,11 +17,10 @@ package emile
 
 import munit.FunSuite
 
-/**
- * Tests for Async handle operations.
- *
- * These tests link to and execute the real libuv library.
- */
+/** Tests for Async handle operations.
+  *
+  * These tests link to and execute the real libuv library.
+  */
 class AsyncSuite extends FunSuite:
 // scalafix:off
 
@@ -31,8 +30,8 @@ class AsyncSuite extends FunSuite:
     val result = for
       loop <- Loop.create
       async <- Async.init(loop) { () =>
-        callbackInvoked = true
-      }
+                 callbackInvoked = true
+               }
       _ <- async.send
       _ <- loop.run(RunMode.NoWait)
       _ = async.close
@@ -49,8 +48,8 @@ class AsyncSuite extends FunSuite:
     val result = for
       loop <- Loop.create
       async <- Async.init(loop) { () =>
-        wokenUp = true
-      }
+                 wokenUp = true
+               }
       startNanos = System.nanoTime()
       // Send signal before running loop
       _ <- async.send
@@ -75,8 +74,8 @@ class AsyncSuite extends FunSuite:
     val result = for
       loop <- Loop.create
       async <- Async.init(loop) { () =>
-        invokeCount += 1
-      }
+                 invokeCount += 1
+               }
       // Send multiple signals
       _ <- async.send
       _ <- async.send
@@ -131,18 +130,19 @@ class AsyncSuite extends FunSuite:
     val result = for
       loop <- Loop.create
       async <- Async.init(loop) { () =>
-        asyncFired = true
-      }
+                 asyncFired = true
+               }
       timer <- Timer.init(loop)
-      _ = { asyncRef = async; timerRef = timer }
+      _ =
+        asyncRef = async; timerRef = timer
       // Timer will send to async when it fires
       _ <- timer.start(Timeout.millis(10), Timeout.Zero) { () =>
-        timerFired = true
-        // Close timer after firing
-        val _ = timerRef.close
-        // Then close async
-        val _ = asyncRef.close
-      }
+             timerFired = true
+             // Close timer after firing
+             val _ = timerRef.close
+             // Then close async
+             val _ = asyncRef.close
+           }
       // Also send async directly
       _ <- async.send
       _ <- loop.run(RunMode.Default)
@@ -152,5 +152,111 @@ class AsyncSuite extends FunSuite:
     assert(result.isRight, s"Expected Right, got $result")
     assert(asyncFired, "Async callback should have fired")
     assert(timerFired, "Timer callback should have fired")
+
+  // ===========================================================================
+  // Lifecycle Safety Tests
+  //
+  // These tests verify async handle lifecycle - proper callback cleanup,
+  // closeAsync semantics, and that callbacks fire correctly during the
+  // libuv event loop execution.
+  // ===========================================================================
+
+  test("Async.closeAsync fires callback after handle is fully closed"):
+    var callbackFired = false
+    var closeCallbackFired = false
+
+    val result = for
+      loop <- Loop.create
+      async <- Async.init(loop)(() => callbackFired = true)
+      _ <- async.send
+      _ <- loop.run(RunMode.NoWait)
+      _ = async.closeAsync(_ => closeCallbackFired = true)
+      _ <- loop.run(RunMode.Default)
+      _ <- loop.close
+    yield ()
+
+    assert(result.isRight, s"Expected Right, got $result")
+    assert(callbackFired, "Async callback should have fired before close")
+    assert(closeCallbackFired, "Close callback must fire")
+
+  test("Rapid async create/close does not corrupt state"):
+    val iterations = 20
+    var closeCount = 0
+
+    val result = for
+      loop <- Loop.create
+      _ <- (0 until iterations).foldLeft(Right(()): Either[EmileError, Unit]) { (acc, _) =>
+             acc.flatMap { _ =>
+               for
+                 async <- Async.init(loop)(() => ())
+                 _ <- async.send
+                 _ <- loop.run(RunMode.NoWait)
+                 _ = async.closeAsync(_ => closeCount += 1)
+                 _ <- loop.run(RunMode.NoWait)
+               yield ()
+             }
+           }
+      _ <- loop.run(RunMode.Default)
+      _ <- loop.close
+    yield closeCount
+
+    assert(result.isRight, s"Expected Right, got $result")
+    result.foreach(count => assertEquals(count, iterations, s"All $iterations close callbacks should fire"))
+
+  test("Async callback fires on each send when loop is run"):
+    // Verifies that async callbacks are actually dispatched by libuv
+    var fireCount = 0
+
+    val result = for
+      loop <- Loop.create
+      async <- Async.init(loop)(() => fireCount += 1)
+      // Send and run - callback should fire
+      _ <- async.send
+      _ <- loop.run(RunMode.NoWait)
+      firstCount = fireCount
+      // Send again and run - callback should fire again
+      _ <- async.send
+      _ <- loop.run(RunMode.NoWait)
+      secondCount = fireCount
+      _ = async.close
+      _ <- loop.run(RunMode.Default)
+      _ <- loop.close
+    yield (firstCount, secondCount)
+
+    assert(result.isRight, s"Expected Right, got $result")
+    result.foreach { case (first, second) =>
+      assertEquals(first, 1, "First send should fire callback once")
+      assertEquals(second, 2, "Second send should fire callback again")
+    }
+
+  test("Async sequential reuse works correctly"):
+    // Create async, use it, close it, create new one - repeat
+    var totalSends = 0
+
+    val result = for
+      loop <- Loop.create
+      // First async handle
+      async1 <- Async.init(loop)(() => totalSends += 1)
+      _ <- async1.send
+      _ <- loop.run(RunMode.NoWait)
+      _ = async1.close
+      _ <- loop.run(RunMode.NoWait)
+      // Second async handle
+      async2 <- Async.init(loop)(() => totalSends += 1)
+      _ <- async2.send
+      _ <- loop.run(RunMode.NoWait)
+      _ = async2.close
+      _ <- loop.run(RunMode.NoWait)
+      // Third async handle
+      async3 <- Async.init(loop)(() => totalSends += 1)
+      _ <- async3.send
+      _ <- loop.run(RunMode.NoWait)
+      _ = async3.close
+      _ <- loop.run(RunMode.Default)
+      _ <- loop.close
+    yield totalSends
+
+    assert(result.isRight, s"Expected Right, got $result")
+    result.foreach(count => assertEquals(count, 3, "All async callbacks should fire"))
 
 end AsyncSuite

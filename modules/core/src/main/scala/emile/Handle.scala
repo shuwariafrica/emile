@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Ali Rashid.
+ * Copyright 2025, 2026 Ali Rashid.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,130 +18,105 @@ package emile
 import scala.scalanative.libc.stdlib.free
 import scala.scalanative.unsafe.*
 
-import emile.unsafe.CallbackIdUtils
-import emile.unsafe.CallbackRegistry
+import emile.unsafe.CallbackStore
 import emile.unsafe.LibUV
 
-/**
- * Type class for libuv handle operations.
- *
- * All handle types share these base operations for lifecycle management,
- * reference counting, and loop access.
- *
- * @tparam H The handle type
- */
+/** Type class for libuv handle operations.
+  *
+  * All handle types share these base operations for lifecycle management, reference counting, and
+  * loop access.
+  *
+  * @tparam H The handle type
+  */
 trait Handle[H]:
   extension (h: H)
-    /**
-     * Close the handle asynchronously.
-     *
-     * This is the safe way to dispose of a handle. The callback will be
-     * invoked when the close is complete.
-     */
+    /** Close the handle asynchronously.
+      *
+      * This is the safe way to dispose of a handle. The callback will be invoked when the close is
+      * complete.
+      */
     def close(callback: Either[EmileError, Unit] => Unit): Unit
 
-    /**
-     * Close the handle without callback.
-     *
-     * Note: The close is still asynchronous, but no notification is provided.
-     */
+    /** Close the handle without callback.
+      *
+      * Note: The close is still asynchronous, but no notification is provided.
+      */
     def close: Either[EmileError, Unit]
 
-    /**
-     * Close the handle synchronously (no callback) with consistent semantics.
-     */
+    /** Close the handle synchronously (no callback) with consistent semantics. */
     def closeSync: Either[EmileError, Unit]
 
-    /**
-     * Check if handle is active.
-     *
-     * What "active" means depends on the handle type:
-     * - TCP: listening, connected, or reading
-     * - Timer: started and not stopped
-     * - Async: always active
-     */
+    /** Check if handle is active.
+      *
+      * What "active" means depends on the handle type:
+      *   - TCP: listening, connected, or reading
+      *   - Timer: started and not stopped
+      *   - Async: always active
+      */
     def isActive: Boolean
 
-    /**
-     * Check if handle is closing or closed.
-     *
-     * Once a handle is closing, no operations should be performed on it.
-     */
+    /** Check if handle is closing or closed.
+      *
+      * Once a handle is closing, no operations should be performed on it.
+      */
     def isClosing: Boolean
 
-    /**
-     * Reference the handle.
-     *
-     * Referenced handles keep the event loop alive. By default, handles
-     * are referenced when created.
-     */
+    /** Reference the handle.
+      *
+      * Referenced handles keep the event loop alive. By default, handles are referenced when
+      * created.
+      */
     def ref: Unit
 
-    /**
-     * Unreference the handle.
-     *
-     * Unreferenced handles do not keep the event loop alive. Useful for
-     * long-running background handles.
-     */
+    /** Unreference the handle.
+      *
+      * Unreferenced handles do not keep the event loop alive. Useful for long-running background
+      * handles.
+      */
     def unref: Unit
 
-    /**
-     * Check if handle is referenced.
-     *
-     * @return true if handle is referenced
-     */
+    /** Check if handle is referenced.
+      *
+      * @return true if handle is referenced
+      */
     def hasRef: Boolean
 
-    /**
-     * Get the owning event loop.
-     *
-     * @return The loop this handle belongs to
-     */
+    /** Get the owning event loop.
+      *
+      * @return The loop this handle belongs to
+      */
     def loop: Loop
 
-    /**
-     * Get handle type.
-     *
-     * @return The type of this handle
-     */
+    /** Get handle type.
+      *
+      * @return The type of this handle
+      */
     def handleType: HandleType
 
-    /**
-     * Get the raw pointer for advanced usage.
-     */
+    /** Get the raw pointer for advanced usage. */
     def ptrUnsafe: Ptr[Byte]
+  end extension
 end Handle
 
 object Handle:
-  /**
-   * Summon Handle instance for type H.
-   *
-   * Uses `transparent inline` to preserve the specific instance type,
-   * enabling better type inference at call sites.
-   */
+  /** Summon Handle instance for type H.
+    *
+    * Uses `transparent inline` to preserve the specific instance type, enabling better type
+    * inference at call sites.
+    */
   transparent inline def apply[H](using h: Handle[H]): Handle[H] = h
 
-  /**
-   * Create a Handle instance from a raw pointer type.
-   *
-   * This provides the common implementation for all handle types.
-   */
+  /** Create a Handle instance from a raw pointer type.
+    *
+    * This provides the common implementation for all handle types.
+    */
   private[emile] def fromPtr[H](toPtr: H => Ptr[Byte]): Handle[H] = new Handle[H]:
     extension (h: H)
       def close(callback: Either[EmileError, Unit] => Unit): Unit =
         val ptr = toPtr(h)
-        val loopPtr = LibUV.uv_handle_get_loop(ptr)
-        if LibUV.uv_is_closing(ptr) != 0 then
-          callback(Left(EmileError.AlreadyClosed))
+        if LibUV.uv_is_closing(ptr) != 0 then callback(Left(EmileError.AlreadyClosed))
         else
-          // First, unregister any existing callback (e.g., async callback)
-          val existingId = CallbackIdUtils.getCallbackId(ptr)
-          if existingId != 0L then
-            val _ = CallbackRegistry.unregister(loopPtr, existingId)
-
-          // Now register the close callback and store its ID
-          val callbackId = CallbackRegistry.registerLoop(loopPtr, callback)
-          CallbackIdUtils.setCallbackId(ptr, callbackId)
+          CallbackStore.attach(ptr, callback)
           LibUV.uv_close(ptr, closeCallback)
 
       def close: Either[EmileError, Unit] =
@@ -149,14 +124,9 @@ object Handle:
 
       def closeSync: Either[EmileError, Unit] =
         val ptr = toPtr(h)
-        val loopPtr = LibUV.uv_handle_get_loop(ptr)
         if LibUV.uv_is_closing(ptr) != 0 then Left(EmileError.AlreadyClosed)
         else
-          val existingId = CallbackIdUtils.getCallbackId(ptr)
-          if existingId != 0L then
-            val _ = CallbackRegistry.unregister(loopPtr, existingId)
-            CallbackIdUtils.clearCallbackId(ptr)
-
+          CallbackStore.detach(ptr)
           LibUV.uv_close(ptr, nullCloseCallback)
           Right(())
 
@@ -182,26 +152,31 @@ object Handle:
         HandleType.fromLibuv(LibUV.uv_handle_get_type(toPtr(h)))
 
       def ptrUnsafe: Ptr[Byte] = toPtr(h)
+    end extension
 
-  /** Close callback that invokes the stored Scala callback via registry, then frees memory. */
+  /** Close a handle asynchronously, detaching any existing data-field callback first.
+    *
+    * This is the standard close pattern for handles that store operational callbacks (timers,
+    * signals, etc.) in the data field. It detaches the current callback, attaches the close
+    * callback, then calls uv_close.
+    */
+  private[emile] def closeAsyncWithDetach(ptr: Ptr[Byte], callback: Either[EmileError, Unit] => Unit): Unit =
+    if LibUV.uv_is_closing(ptr) != 0 then callback(Left(EmileError.AlreadyClosed))
+    else
+      CallbackStore.detach(ptr)
+      CallbackStore.attach(ptr, callback)
+      LibUV.uv_close(ptr, closeCallback)
+
+  /** Close callback: invokes stored Scala callback, then frees handle memory. */
   private[emile] val closeCallback: LibUV.CloseCB = (handle: Ptr[Byte]) =>
-    val loopPtr = LibUV.uv_handle_get_loop(handle)
-    val callbackId = CallbackIdUtils.getCallbackId(handle)
-    CallbackRegistry.findAs[Either[EmileError, Unit] => Unit](loopPtr, callbackId).foreach { callback =>
-      val _ = CallbackRegistry.unregister(loopPtr, callbackId)
-      CallbackIdUtils.clearCallbackId(handle)
+    CallbackStore.get[Either[EmileError, Unit] => Unit](handle).foreach { callback =>
+      CallbackStore.detach(handle)
       callback(Right(()))
     }
-    // Free the handle memory that was allocated with malloc
     free(handle)
 
-  /** Close callback that frees memory (for close without user callback). */
+  /** Close callback: detaches any callback, then frees handle memory. */
   private[emile] val nullCloseCallback: LibUV.CloseCB = (handle: Ptr[Byte]) =>
-    val loopPtr = LibUV.uv_handle_get_loop(handle)
-    val existingId = CallbackIdUtils.getCallbackId(handle)
-    if existingId != 0L then
-      val _ = CallbackRegistry.unregister(loopPtr, existingId)
-      CallbackIdUtils.clearCallbackId(handle)
-    // Free the handle memory that was allocated with malloc
+    CallbackStore.detach(handle)
     free(handle)
 end Handle

@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Ali Rashid.
+ * Copyright 2025, 2026 Ali Rashid.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,14 +22,13 @@ import emile.ipa.Ipv6Address
 import emile.ipa.Port
 import emile.ipa.SocketAddress
 
-/**
- * Tests for EmileConfig, LoopConfig, and TcpConfig.
- *
- * These tests verify:
- * - Configuration ADT with Option-based overrides
- * - Separate code paths for default vs configured operations
- * - Real libuv integration for all configuration paths
- */
+/** Tests for EmileConfig, LoopConfig, and TcpConfig.
+  *
+  * These tests verify:
+  *   - Configuration ADT with Option-based overrides
+  *   - Separate code paths for default vs configured operations
+  *   - Real libuv integration for all configuration paths
+  */
 class EmileConfigSuite extends FunSuite:
 // scalafix:off
 
@@ -305,7 +304,7 @@ class EmileConfigSuite extends FunSuite:
       _ <- tcp.setNoDelay(true)
       _ <- tcp.setNoDelay(false)
       _ <- tcp.setKeepAlive(true, 60)
-      _ <- tcp.setKeepAlive(false)
+      _ <- tcp.disableKeepAlive
       _ <- tcp.setSimultaneousAccepts(false)
       _ <- tcp.setSimultaneousAccepts(true)
       _ = tcp.close
@@ -408,7 +407,7 @@ class EmileConfigSuite extends FunSuite:
       server <- Tcp.init(loop, serverConfig.tcp)
       _ <- server.bind(addr("127.0.0.1", 0), serverConfig.tcp)
       sockName <- server.getSocketName
-      _ = { serverBound = true }
+      _ = serverBound = true
       _ = server.close
       _ <- loop.run(RunMode.Default)
       _ <- loop.close

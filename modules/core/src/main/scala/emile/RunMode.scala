@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Ali Rashid.
+ * Copyright 2025, 2026 Ali Rashid.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,11 +15,10 @@
  */
 package emile
 
-/**
- * Run mode for the event loop.
- *
- * Controls how `Loop.run` processes events.
- */
+/** Run mode for the event loop.
+  *
+  * Controls how `Loop.run` processes events.
+  */
 enum RunMode derives CanEqual:
   /** Run until no more active handles/requests. Default mode. */
   case Default
@@ -29,13 +28,11 @@ enum RunMode derives CanEqual:
 
   /** Poll once, non-blocking. Returns immediately if no pending events. */
   case NoWait
-end RunMode
 
 object RunMode:
   /** Convert to libuv UV_RUN_* constant. */
   extension (mode: RunMode)
     private[emile] inline def toLibuv: Int = mode match
-      case Default => 0  // UV_RUN_DEFAULT
-      case Once    => 1  // UV_RUN_ONCE
-      case NoWait  => 2  // UV_RUN_NOWAIT
-end RunMode
+      case Default => 0 // UV_RUN_DEFAULT
+      case Once    => 1 // UV_RUN_ONCE
+      case NoWait  => 2 // UV_RUN_NOWAIT

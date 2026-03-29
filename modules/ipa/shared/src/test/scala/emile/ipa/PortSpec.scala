@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Ali Rashid.
+ * Copyright 2025, 2026 Ali Rashid.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,18 +17,7 @@ package emile.ipa
 
 import munit.FunSuite
 
-/**
- * Tests for Port opaque type.
- *
- * Tests cover:
- * - fromInt: runtime validation
- * - fromString: string parsing
- * - unsafeFromInt: unsafe construction
- * - value: extraction
- * - show: string representation
- * - Ordering: comparison
- * - Constants: MinValue, MaxValue, Wildcard
- */
+/** Tests for Port opaque type. */
 class PortSpec extends FunSuite:
 // scalafix:off
 
@@ -137,19 +126,16 @@ class PortSpec extends FunSuite:
     assert(result.isLeft)
 
   // ============================================================
-  // unsafeFromInt tests
+  // wrap tests (unchecked construction via OpaqueType)
   // ============================================================
 
-  test("Port.unsafeFromInt creates port for valid value"):
-    val port = Port.unsafeFromInt(443)
+  test("Port.wrap creates port for valid value"):
+    val port = Port.wrap(443)
     assertEquals(port.value, 443)
 
-  test("Port.unsafeFromInt creates port for boundary values"):
-    assertEquals(Port.unsafeFromInt(0).value, 0)
-    assertEquals(Port.unsafeFromInt(65535).value, 65535)
-
-  // Note: unsafeFromInt does NOT validate - it's caller's responsibility
-  // We don't test invalid values as behavior is undefined
+  test("Port.wrap creates port for boundary values"):
+    assertEquals(Port.wrap(0).value, 0)
+    assertEquals(Port.wrap(65535).value, 65535)
 
   // ============================================================
   // value extraction tests
@@ -257,7 +243,6 @@ val bad = port"80a${1}"
 
   test("Port.SQLServer.SQLServer is 1433"):
     assertEquals(Port.SQLServer.value, 1433)
-
 
   // ============================================================
   // Ordering tests

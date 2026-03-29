@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Ali Rashid.
+ * Copyright 2025, 2026 Ali Rashid.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,21 +17,20 @@ package emile.ipa
 
 import munit.FunSuite
 
-/**
- * Tests for SocketAddress enum type.
- *
- * Tests cover:
- * - v4 / v6 constructors
- * - port extraction
- * - isV4 / isV6 checks
- * - fold operation
- * - show: string representation
- * - toIpv4 / toIpv6 extraction
- * - withPort modification
- * - fromString parsing (IPv4:port and [IPv6]:port formats)
- * - Convenience constructors: localhost, localhost6, any, any6
- * - Wildcard constant
- */
+/** Tests for SocketAddress enum type.
+  *
+  * Tests cover:
+  *   - v4 / v6 constructors
+  *   - port extraction
+  *   - isV4 / isV6 checks
+  *   - fold operation
+  *   - show: string representation
+  *   - toIpv4 / toIpv6 extraction
+  *   - withPort modification
+  *   - fromString parsing (IPv4:port and [IPv6]:port formats)
+  *   - Convenience constructors: localhost, localhost6, any, any6
+  *   - Wildcard constant
+  */
 class SocketAddressSpec extends FunSuite:
 // scalafix:off
 

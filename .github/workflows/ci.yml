@@ -1,0 +1,341 @@
+name: "Integration Build"
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+  push:
+    branches: [main]
+    tags: [v*]
+    paths-ignore:
+      - "**.md"
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  JDK_RELEASE: 21
+  JDK_CURRENT: 25
+  SBT_OPTS: >-
+    -Xmx10G
+    -Xms6G
+    -Xss8M
+    -XX:ReservedCodeCacheSize=512M
+
+jobs:
+  test_jvm:
+    name: Test (JVM / JDK ${{ matrix.java }})
+    strategy:
+      fail-fast: false
+      matrix:
+        java: [21, 25]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java ${{ matrix.java }}
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+          check-latest: true
+
+      - name: Set up sbt
+        uses: sbt/setup-sbt@v1
+
+      - name: Set up Coursier cache
+        uses: coursier/cache-action@v8
+
+      - name: Test
+        run: sbt --no-colors --supershell=false "emile-jvm/test"
+
+      - name: Package
+        run: sbt --no-colors --supershell=false "emile-jvm/package"
+
+  test_js:
+    name: Test (JS)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java ${{ env.JDK_CURRENT }}
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ env.JDK_CURRENT }}
+          check-latest: true
+
+      - name: Set up sbt
+        uses: sbt/setup-sbt@v1
+
+      - name: Set up Coursier cache
+        uses: coursier/cache-action@v8
+
+      - name: Test
+        run: sbt --no-colors --supershell=false "emile-js/test"
+
+      - name: Package
+        run: sbt --no-colors --supershell=false "emile-js/package"
+
+  test_native:
+    name: Test (Native / ${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java ${{ env.JDK_CURRENT }}
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ env.JDK_CURRENT }}
+          check-latest: true
+
+      - name: Set up sbt
+        uses: sbt/setup-sbt@v1
+
+      - name: Set up Coursier cache
+        uses: coursier/cache-action@v8
+
+      # Scala Native toolchain + libuv
+      - name: Install LLVM/Clang toolchain and libuv (Ubuntu)
+        if: startsWith(matrix.os, 'ubuntu')
+        shell: bash
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y clang lld llvm libuv1-dev
+
+      - name: Install LLVM toolchain and libuv (macOS)
+        if: startsWith(matrix.os, 'macos')
+        shell: bash
+        run: |
+          brew update
+          brew install llvm libuv || true
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+
+      - name: Install LLVM toolchain and libuv (Windows)
+        if: startsWith(matrix.os, 'windows')
+        shell: pwsh
+        run: |
+          choco install -y llvm
+          echo "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          # libuv is bundled with Node.js on Windows; for native linking, vcpkg or manual install may be needed
+
+      - name: Test
+        run: sbt --no-colors --supershell=false "emile-native/test"
+
+      - name: Package
+        run: sbt --no-colors --supershell=false "emile-native/package"
+
+  static_analysis:
+    name: Static Analysis
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java ${{ env.JDK_CURRENT }}
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ env.JDK_CURRENT }}
+          check-latest: true
+
+      - name: Set up sbt
+        uses: sbt/setup-sbt@v1
+
+      - name: Set up Coursier cache
+        uses: coursier/cache-action@v8
+
+      - name: Verify Source Formatting
+        id: scalafmt
+        continue-on-error: true
+        run: sbt --no-colors --supershell=false "scalafmtCheckAll; scalafmtSbtCheck"
+
+      - name: Verify Linting Conformity
+        id: scalafix
+        continue-on-error: true
+        run: sbt --no-colors --supershell=false "scalafixAll --check"
+
+      - name: Verify File Header Conformity
+        id: headers
+        continue-on-error: true
+        run: sbt --no-colors --supershell=false headerCheckAll
+
+      - name: Check for failures
+        if: always()
+        run: |
+          failed=""
+          [[ "${{ steps.scalafmt.outcome }}" == "failure" ]] && failed="$failed scalafmtCheckAll"
+          [[ "${{ steps.scalafix.outcome }}" == "failure" ]] && failed="$failed scalafixAll"
+          [[ "${{ steps.headers.outcome }}" == "failure" ]] && failed="$failed headerCheckAll"
+          if [[ -n "$failed" ]]; then
+            echo "::error::Static analysis checks failed:$failed"
+            exit 1
+          fi
+
+  snapshot:
+    name: Publish Snapshot
+    needs:
+      - test_jvm
+      - test_js
+      - test_native
+      - static_analysis
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java ${{ env.JDK_RELEASE }}
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ env.JDK_RELEASE }}
+          check-latest: true
+
+      - name: Set up sbt
+        uses: sbt/setup-sbt@v1
+
+      - name: Set up Coursier cache
+        uses: coursier/cache-action@v8
+
+      - name: Import Signing Key
+        uses: crazy-max/ghaction-import-gpg@v7
+        with:
+          gpg_private_key: ${{ secrets.SIGNING_KEY }}
+          trust_level: 5
+
+      - name: Publish Snapshot
+        run: sbt --no-colors --supershell=false aetherDeploy
+        env:
+          SONATYPE_USERNAME: ${{ secrets.PUBLISH_USER }}
+          SONATYPE_PASSWORD: ${{ secrets.PUBLISH_USER_PASSPHRASE }}
+          SIGNING_KEY_ID: ${{ secrets.SIGNING_KEY_ID }}
+
+  publish:
+    name: Publish Release
+    needs:
+      - test_jvm
+      - test_js
+      - test_native
+      - static_analysis
+    if: github.event_name != 'pull_request' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java ${{ env.JDK_RELEASE }}
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ env.JDK_RELEASE }}
+          check-latest: true
+
+      - name: Set up sbt
+        uses: sbt/setup-sbt@v1
+
+      - name: Set up Coursier cache
+        uses: coursier/cache-action@v8
+
+      - name: Import Signing Key
+        uses: crazy-max/ghaction-import-gpg@v7
+        with:
+          gpg_private_key: ${{ secrets.SIGNING_KEY }}
+          git_user_signingkey: true
+          git_commit_gpgsign: true
+          trust_level: 5
+
+      - name: Publish Projects
+        run: sbt --no-colors --supershell=false "clean; publishSigned; sonaUpload; sonaRelease"
+        env:
+          SONATYPE_USERNAME: ${{ secrets.PUBLISH_USER }}
+          SONATYPE_PASSWORD: ${{ secrets.PUBLISH_USER_PASSPHRASE }}
+          SIGNING_KEY_ID: ${{ secrets.SIGNING_KEY_ID }}
+
+  release:
+    name: Create GitHub Release
+    needs: [publish]
+    if: github.event_name != 'pull_request' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          prerelease_flag=""
+          if [[ "${{ github.ref_name }}" == *-* ]]; then
+            prerelease_flag="--prerelease"
+          fi
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ github.ref_name }}" \
+            --generate-notes \
+            --verify-tag \
+            $prerelease_flag
+
+  dependency-graph:
+    name: Update Dependency Graph
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java ${{ env.JDK_CURRENT }}
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ env.JDK_CURRENT }}
+          check-latest: true
+
+      - name: Set up sbt
+        uses: sbt/setup-sbt@v1
+
+      - name: Submit Dependency Graph
+        uses: scalacenter/sbt-dependency-submission@v3

@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Ali Rashid.
+ * Copyright 2025, 2026 Ali Rashid.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,24 +15,22 @@
  */
 package emile.cats
 
-/**
- * Convenience syntax for emile-cats module.
- *
- * Import this object to get all emile-cats extensions and utilities:
- * {{{
- * import emile.cats.syntax.all.*
- * }}}
- */
+/** Convenience syntax for emile-cats module.
+  *
+  * Import this object to get all emile-cats extensions and utilities:
+  * {{{
+  * import emile.cats.syntax.all.*
+  * }}}
+  */
 object syntax:
-  /**
-   * All emile-cats syntax.
-   *
-   * Exports:
-   * - Eff conversion: .rethrow (Eff → IO raises)
-   * - IO error handling: .catchEmile, .recoverEmile
-   * - Emile pattern extractor for error handlers
-   * - EmileLoop extensions (.runOnce, .runUntilComplete, .runNoWait)
-   */
+  /** All emile-cats syntax.
+    *
+    * Exports:
+    *   - Eff conversion: .rethrow (Eff → IO raises)
+    *   - IO error handling: .catchEmile, .recoverEmile
+    *   - Emile pattern extractor for error handlers
+    *   - EmileLoop extensions (.runOnce, .runUntilComplete, .runNoWait)
+    */
   object all:
     export emile.cats.{rethrow, catchEmile, recoverEmile, Emile}
     export emile.cats.EmileLoop.{runOnce, runUntilComplete, runNoWait}

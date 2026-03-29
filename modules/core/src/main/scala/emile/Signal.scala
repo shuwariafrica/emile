@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Ali Rashid.
+ * Copyright 2025, 2026 Ali Rashid.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,35 +16,47 @@
 package emile
 
 import scala.scalanative.libc.signal as clib
+import scala.scalanative.meta.LinktimeInfo.isWindows
 import scala.scalanative.posix.signal as posix
 
-/**
- * POSIX signal constants for use with [[SignalWatcher]].
- *
- * These constants delegate to Scala Native's platform-abstracted signal
- * bindings, ensuring correct values across Linux, macOS, and BSD variants.
- *
- * == Common Signals ==
- *
- * {{{
- * SIGINT  - Interrupt from keyboard (Ctrl+C)
- * SIGTERM - Termination signal
- * SIGHUP  - Hangup signal
- * SIGUSR1 - User-defined signal 1
- * SIGUSR2 - User-defined signal 2
- * }}}
- *
- * == Example ==
- * {{{
- * // Using SignalStream in cats-effect
- * SignalStream.watch(Signal.SIGTERM).use { case (queue, ready) =>
- *   ready >> queue.take >> IO.println("Received SIGTERM")
- * }
- * }}}
- *
- * @note Signal numbers are platform-specific. These accessors return the
- *       correct values for the target platform at link time.
- */
+/** POSIX signal constants for use with [[SignalHandle]].
+  *
+  * These constants delegate to Scala Native's platform-abstracted signal bindings, ensuring correct
+  * values across Linux, macOS, and BSD variants.
+  *
+  * ==Common Signals==
+  *
+  * {{{
+  * SIGINT  - Interrupt from keyboard (Ctrl+C)
+  * SIGTERM - Termination signal
+  * SIGHUP  - Hangup signal
+  * SIGUSR1 - User-defined signal 1
+  * SIGUSR2 - User-defined signal 2
+  * }}}
+  *
+  * ==Platform Support==
+  *
+  * '''Unix/Linux/macOS:''' Full POSIX signal support.
+  *
+  * '''Windows:''' Only a subset of signals are supported:
+  *   - `SIGINT` - Ctrl+C pressed
+  *   - `SIGBREAK` - Ctrl+Break pressed (Windows-specific, value 21)
+  *   - `SIGHUP` - Console window closed
+  *
+  * Other signals can have watchers created but will never be received on Windows. Use
+  * [[isWindowsSupported]] to check at link time.
+  *
+  * ==Example==
+  * {{{
+  * // Using SignalStream in cats-effect
+  * SignalStream.watch(Signal.SIGTERM).use { case (queue, ready) =>
+  *   ready >> queue.take >> IO.println("Received SIGTERM")
+  * }
+  * }}}
+  *
+  * @note Signal numbers are platform-specific. These accessors return the correct values for the
+  *   target platform at link time.
+  */
 object Signal:
 
   // =========================================================================
@@ -109,8 +121,35 @@ object Signal:
   /** User-defined signal 2. */
   inline def SIGUSR2: Int = posix.SIGUSR2
 
-  // TODO: SIGWINCH (window resize) is a BSD/System V extension not yet in
-  // Scala Native's bindings. Add when upstream support is available or
-  // implement via custom C helper if needed for terminal applications.
+  // =========================================================================
+  // Windows-specific Signals
+  // =========================================================================
+
+  /** Break signal (Windows only).
+    *
+    * Delivered when the user presses Ctrl+Break. On Unix systems, this constant is 21 but the
+    * signal is not delivered.
+    */
+  inline def SIGBREAK: Int = 21
+
+  // =========================================================================
+  // Platform Support Helpers
+  // =========================================================================
+
+  /** Check if a signal is supported on the current platform.
+    *
+    * On Windows, only SIGINT, SIGBREAK, and SIGHUP are reliably delivered. Other signals can have
+    * watchers created but will never fire.
+    *
+    * This is resolved at link time for zero runtime overhead.
+    *
+    * @param signum The signal number to check
+    * @return true if the signal is supported on this platform
+    */
+  inline def isSupported(signum: Int): Boolean =
+    if isWindows then signum == SIGINT || signum == SIGBREAK || signum == SIGHUP
+    else
+      // On Unix, all standard signals are supported (except SIGKILL/SIGSTOP which can't be caught)
+      signum != SIGKILL && signum != SIGSTOP
 
 end Signal

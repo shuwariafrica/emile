@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Ali Rashid.
+ * Copyright 2025, 2026 Ali Rashid.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,110 +17,52 @@ package emile.ipa
 
 import scala.compiletime.error
 
+import boilerplate.*
 import boilerplate.nullable.*
 
-/**
- * A TCP or UDP port number in the range [0, 65535].
- *
- * This is a zero-cost opaque type wrapping `Int`. Port values are validated at
- * compile time when using literal values, or at runtime when parsing from
- * strings or integers.
- *
- * == Construction ==
- *
- * {{{
- * // Compile-time validated literal (preferred)
- * val http = Port(80)
- * val https = Port(443)
- *
- * // Runtime validation
- * val dynamic: Either[AddressError, Port] = Port.from(userInput)
- * val parsed: Either[AddressError, Port] = Port.from("8080")
- *
- * // Unchecked (caller must ensure validity)
- * val unsafe = Port.unsafeFromInt(value)
- * }}}
- *
- * == Well-known Ports ==
- *
- * {{{
- * Port.Wildcard  // 0 - lets the OS choose an ephemeral port
- * }}}
- *
- * @see
- *   [[https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml IANA Port Numbers]]
- */
+/** A TCP or UDP port number in the range [0, 65535].
+  *
+  * Zero-cost opaque type wrapping `Int`. Instances may be constructed via [[Port$ Port]].
+  *
+  * @see
+  *   [[https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml IANA Port Numbers]]
+  */
 opaque type Port = Int
 
-object Port:
-  given CanEqual[Port, Port] = CanEqual.derived
-  given Ordering[Port]       = Ordering.Int
+/** Provides factories, constants, and extension syntax for [[Port]]. */
+object Port extends OpaqueType[Port, Int], OpaqueType.Eq[Port]:
+  type Error = AddressError
 
-  /** Minimum valid port value. */
+  given Ordering[Port] = Ordering.Int
+
   inline val MinValue = 0
-
-  /** Maximum valid port value. */
   inline val MaxValue = 65535
 
   /** Wildcard port (0) - lets the OS choose an ephemeral port. */
   val Wildcard: Port = 0
 
-  // =========================================================================
-  // Well-Known Ports
-  // =========================================================================
-
-  /** SSH port. */
+  // Well-known ports
   inline def SSH: Port = 22
-
-  /** DNS port. */
   inline def DNS: Port = 53
-
-  /** HTTP port. */
   inline def HTTP: Port = 80
-
-  /** HTTPS port. */
   inline def HTTPS: Port = 443
-
-  /** MySQL default port. */
   inline def MySQL: Port = 3306
-
-  /** PostgreSQL default port. */
   inline def PostgreSQL: Port = 5432
-
-  /** Redis default port. */
   inline def Redis: Port = 6379
-
-  /** Microsoft SQL Server default port. */
   inline def SQLServer: Port = 1433
 
-  /**
-   * Construct a Port from a literal integer with compile-time validation.
-   *
-   * This method uses Scala 3's inline feature to validate the port value at
-   * compile time. If the value is not a literal or is out of range, a
-   * compile-time error is raised.
-   *
-   * @param value
-   *   The port number (must be a literal in range 0-65535)
-   * @return
-   *   The validated Port
-   */
+  inline def wrap(value: Int): Port = value
+  inline def unwrap(port: Port): Int = port
+
+  protected inline def validate(value: Int): Option[AddressError] =
+    if value >= MinValue && value <= MaxValue then None
+    else Some(AddressError.InvalidPort(value))
+
   inline def apply(inline value: Int): Port =
-    inline if value < MinValue || value > MaxValue then
-      error("Port must be in range 0-65535")
+    inline if value < MinValue || value > MaxValue then error("Port must be in range 0-65535")
     else value
 
-  /**
-   * Construct a Port from a runtime integer with validation.
-   */
-  def from(value: Int): Either[AddressError, Port] =
-    if value >= MinValue && value <= MaxValue then Right(value)
-    else Left(AddressError.InvalidPort(value))
-
-  /**
-   * Parse a Port from a string representation with validation and error
-   * detail.
-   */
+  /** Parse a Port from a string representation. */
   def from(value: String | Null): Either[AddressError, Port] =
     value.either(AddressError.InvalidPortString("null", "null input")).flatMap { v =>
       val trimmed = v.trim
@@ -130,14 +72,6 @@ object Port:
           case Some(n) => from(n)
           case None    => Left(AddressError.InvalidPortString(v, "non-numeric input"))
     }
-
-  /**
-   * Construct a Port from an integer without validation.
-   *
-   * WARNING: Caller must ensure value is in valid range [0, 65535]. Using
-   * invalid values leads to undefined behaviour.
-   */
-  inline def unsafeFromInt(value: Int): Port = value
 
   extension (p: Port)
     /** Get the underlying integer value. */
@@ -153,5 +87,6 @@ object Port:
       val sb = new java.lang.StringBuilder
       writeTo(sb): Unit
       sb.toString
+  end extension
 
 end Port

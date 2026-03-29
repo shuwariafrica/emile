@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Ali Rashid.
+ * Copyright 2025, 2026 Ali Rashid.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,13 +17,12 @@ package emile.ipa
 
 import munit.FunSuite
 
-/**
- * Tests for AddressError enum type.
- *
- * Tests cover:
- * - message formatting for each variant
- * - Equality
- */
+/** Tests for AddressError enum type.
+  *
+  * Tests cover:
+  *   - message formatting for each variant
+  *   - Equality
+  */
 class AddressErrorSpec extends FunSuite:
 
   // ============================================================
@@ -41,7 +40,7 @@ class AddressErrorSpec extends FunSuite:
     val err = AddressError.InvalidPort(70000)
     err match
       case AddressError.InvalidPort(v) => assertEquals(v, 70000)
-      case _ => fail("Expected InvalidPort")
+      case _                           => fail("Expected InvalidPort")
 
   test("AddressError.InvalidPort equality"):
     val err1 = AddressError.InvalidPort(100)
@@ -83,13 +82,13 @@ class AddressErrorSpec extends FunSuite:
     val err = AddressError.InvalidIpv4("256.1.1.1", "octet out of range")
     err match
       case AddressError.InvalidIpv4(i, _) => assertEquals(i, "256.1.1.1")
-      case _ => fail("Expected InvalidIpv4")
+      case _                              => fail("Expected InvalidIpv4")
 
   test("AddressError.InvalidIpv4 preserves detail"):
     val err = AddressError.InvalidIpv4("a.b.c.d", "non-numeric octet")
     err match
       case AddressError.InvalidIpv4(_, d) => assertEquals(d, "non-numeric octet")
-      case _ => fail("Expected InvalidIpv4")
+      case _                              => fail("Expected InvalidIpv4")
 
   test("AddressError.InvalidIpv4 equality"):
     val err1 = AddressError.InvalidIpv4("x", "y")
@@ -111,13 +110,13 @@ class AddressErrorSpec extends FunSuite:
     val err = AddressError.InvalidIpv6("ghij::1", "invalid hex")
     err match
       case AddressError.InvalidIpv6(i, _) => assertEquals(i, "ghij::1")
-      case _ => fail("Expected InvalidIpv6")
+      case _                              => fail("Expected InvalidIpv6")
 
   test("AddressError.InvalidIpv6 preserves detail"):
     val err = AddressError.InvalidIpv6("1:2:3:4:5:6:7:8:9", "too many groups")
     err match
       case AddressError.InvalidIpv6(_, d) => assertEquals(d, "too many groups")
-      case _ => fail("Expected InvalidIpv6")
+      case _                              => fail("Expected InvalidIpv6")
 
   test("AddressError.InvalidIpv6 equality"):
     val err1 = AddressError.InvalidIpv6("a", "b")
@@ -139,13 +138,13 @@ class AddressErrorSpec extends FunSuite:
     val err = AddressError.InvalidSocketAddress("[::1", "missing bracket")
     err match
       case AddressError.InvalidSocketAddress(i, _) => assertEquals(i, "[::1")
-      case _ => fail("Expected InvalidSocketAddress")
+      case _                                       => fail("Expected InvalidSocketAddress")
 
   test("AddressError.InvalidSocketAddress preserves detail"):
     val err = AddressError.InvalidSocketAddress("bad", "invalid format")
     err match
       case AddressError.InvalidSocketAddress(_, d) => assertEquals(d, "invalid format")
-      case _ => fail("Expected InvalidSocketAddress")
+      case _                                       => fail("Expected InvalidSocketAddress")
 
   test("AddressError.InvalidSocketAddress equality"):
     val err1 = AddressError.InvalidSocketAddress("x", "y")

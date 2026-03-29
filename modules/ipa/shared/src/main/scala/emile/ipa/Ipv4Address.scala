@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Ali Rashid.
+ * Copyright 2025, 2026 Ali Rashid.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,42 +17,46 @@ package emile.ipa
 
 import scala.compiletime.error
 
+import boilerplate.*
 import boilerplate.nullable.*
 
-/**
- * IPv4 address represented as a 32-bit unsigned integer in host byte order.
- *
- * This is a zero-cost opaque type wrapping `Int`. The four octets are stored
- * as: `(a << 24) | (b << 16) | (c << 8) | d` for address `a.b.c.d`.
- *
- * == Construction ==
- *
- * {{{
- * // From string (runtime validation)
- * val addr: Either[AddressError, Ipv4Address] = Ipv4Address.from("192.168.1.1")
- *
- * // From octets (compile-time validation for literals)
- * val localhost = Ipv4Address.fromOctets(127, 0, 0, 1)
- *
- * // From raw Int (unchecked)
- * val raw = Ipv4Address.fromInt(0x7F000001) // 127.0.0.1
- * }}}
- *
- * == Well-known Addresses ==
- *
- * {{{
- * Ipv4Address.Wildcard  // 0.0.0.0
- * Ipv4Address.Loopback  // 127.0.0.1
- * Ipv4Address.Broadcast // 255.255.255.255
- * }}}
- */
+/** IPv4 address represented as a 32-bit unsigned integer in host byte order.
+  *
+  * This is a zero-cost opaque type wrapping `Int`. The four octets are stored as:
+  * `(a << 24) | (b << 16) | (c << 8) | d` for address `a.b.c.d`.
+  *
+  * ==Construction==
+  *
+  * {{{
+  * // From string (runtime validation)
+  * val addr: Either[AddressError, Ipv4Address] = Ipv4Address.from("192.168.1.1")
+  *
+  * // From octets (compile-time validation for literals)
+  * val localhost = Ipv4Address.fromOctets(127, 0, 0, 1)
+  *
+  * // From raw Int (unchecked)
+  * val raw = Ipv4Address.fromInt(0x7F000001) // 127.0.0.1
+  * }}}
+  *
+  * ==Well-known Addresses==
+  *
+  * {{{
+  * Ipv4Address.Wildcard  // 0.0.0.0
+  * Ipv4Address.Loopback  // 127.0.0.1
+  * Ipv4Address.Broadcast // 255.255.255.255
+  * }}}
+  */
 opaque type Ipv4Address = Int
 
-object Ipv4Address:
-  given CanEqual[Ipv4Address, Ipv4Address] = CanEqual.derived
+object Ipv4Address extends OpaqueType[Ipv4Address, Int], OpaqueType.Eq[Ipv4Address]:
+  type Error = AddressError
+
+  inline def wrap(value: Int): Ipv4Address = value
+  inline def unwrap(addr: Ipv4Address): Int = addr
+  protected inline def validate(value: Int): Option[AddressError] = None
+  inline def apply(inline value: Int): Ipv4Address = value
 
   given Ordering[Ipv4Address] =
-    // Unsigned comparison
     (x, y) => java.lang.Integer.compareUnsigned(x, y)
 
   /** Wildcard address 0.0.0.0 - binds to all interfaces. */
@@ -64,30 +68,23 @@ object Ipv4Address:
   /** Broadcast address 255.255.255.255. */
   val Broadcast: Ipv4Address = 0xffffffff
 
-  /**
-   * Parse an IPv4 address from dotted-decimal string with error details.
-   */
+  /** Parse an IPv4 address from dotted-decimal string with error details. */
   def from(value: String): Either[AddressError, Ipv4Address] =
     parseIpv4(value)
 
   private def parseIpv4(value: String | Null): Either[AddressError, Ipv4Address] =
     value.either(AddressError.InvalidIpv4("null", "null input")).flatMap { v =>
-      if v.isEmpty then
-        Left(AddressError.InvalidIpv4(v, "empty input"))
-      else if v.startsWith(".") || v.endsWith(".") then
-        Left(AddressError.InvalidIpv4(v, "leading or trailing dot"))
-      else if v.contains("..") then
-        Left(AddressError.InvalidIpv4(v, "consecutive dots"))
+      if v.isEmpty then Left(AddressError.InvalidIpv4(v, "empty input"))
+      else if v.startsWith(".") || v.endsWith(".") then Left(AddressError.InvalidIpv4(v, "leading or trailing dot"))
+      else if v.contains("..") then Left(AddressError.InvalidIpv4(v, "consecutive dots"))
       else
         val parts = v.split('.')
-        if parts.length != 4 then
-          Left(AddressError.InvalidIpv4(v, s"expected 4 octets, got ${parts.length}"))
+        if parts.length != 4 then Left(AddressError.InvalidIpv4(v, s"expected 4 octets, got ${parts.length}"))
         else
           try
             val octets = parts.map { s =>
               val n = s.toInt
-              if n < 0 || n > 255 then
-                throw new IllegalArgumentException(s"octet $n out of range") // scalafix:ok; internal try/catch control flow
+              if n < 0 || n > 255 then throw new IllegalArgumentException(s"octet $n out of range") // scalafix:ok; internal try/catch control flow
               n
             }
             Right(
@@ -101,69 +98,47 @@ object Ipv4Address:
               Left(AddressError.InvalidIpv4(v, "invalid octet format"))
             case e: IllegalArgumentException =>
               Left(AddressError.InvalidIpv4(v, e.getMessage))
+        end if
     }
 
-  /**
-   * Construct from four octets with compile-time validation for literals.
-   *
-   * @param a
-   *   First octet (0-255)
-   * @param b
-   *   Second octet (0-255)
-   * @param c
-   *   Third octet (0-255)
-   * @param d
-   *   Fourth octet (0-255)
-   * @return
-   *   The IPv4 address
-   */
+  /** Construct from four octets with compile-time validation for literals.
+    *
+    * @param a First octet (0-255)
+    * @param b Second octet (0-255)
+    * @param c Third octet (0-255)
+    * @param d Fourth octet (0-255)
+    * @return The IPv4 address
+    */
   inline def fromOctets(
-      inline a: Int,
-      inline b: Int,
-      inline c: Int,
-      inline d: Int
+    inline a: Int,
+    inline b: Int,
+    inline c: Int,
+    inline d: Int
   ): Ipv4Address =
-    inline if a < 0 || a > 255 || b < 0 || b > 255 || c < 0 || c > 255 || d < 0 || d > 255 then
-      error("IPv4 octets must be in range 0-255")
+    inline if a < 0 || a > 255 || b < 0 || b > 255 || c < 0 || c > 255 || d < 0 || d > 255 then error("IPv4 octets must be in range 0-255")
     else ((a & 0xff) << 24) | ((b & 0xff) << 16) | ((c & 0xff) << 8) | (d & 0xff)
 
-  /**
-   * Construct from four octets at runtime with validation.
-   *
-   * @param a
-   *   First octet (0-255)
-   * @param b
-   *   Second octet (0-255)
-   * @param c
-   *   Third octet (0-255)
-   * @param d
-   *   Fourth octet (0-255)
-   * @return
-   *   Either an error or the IPv4 address
-   */
+  /** Construct from four octets at runtime with validation.
+    *
+    * @param a First octet (0-255)
+    * @param b Second octet (0-255)
+    * @param c Third octet (0-255)
+    * @param d Fourth octet (0-255)
+    * @return Either an error or the IPv4 address
+    */
   def from(a: Int, b: Int, c: Int, d: Int): Either[AddressError, Ipv4Address] =
     if a < 0 || a > 255 || b < 0 || b > 255 || c < 0 || c > 255 || d < 0 || d > 255 then
       Left(AddressError.InvalidIpv4(s"$a.$b.$c.$d", "octets must be in range 0-255"))
     else Right(((a & 0xff) << 24) | ((b & 0xff) << 16) | ((c & 0xff) << 8) | (d & 0xff))
 
-  /**
-   * Construct from raw 32-bit integer.
-   *
-   * @param value
-   *   The 32-bit address in host byte order
-   * @return
-   *   The IPv4 address
-   */
-  inline def fromInt(value: Int): Ipv4Address = value
+  /** Construct from raw 32-bit integer (alias for `wrap`). */
+  inline def fromInt(value: Int): Ipv4Address = wrap(value)
 
-  /**
-   * Construct from byte array (must be exactly 4 bytes, network order).
-   *
-   * @param bytes
-   *   The 4-byte array
-   * @return
-   *   Some(Ipv4Address) if valid, None otherwise
-   */
+  /** Construct from byte array (must be exactly 4 bytes, network order).
+    *
+    * @param bytes The 4-byte array
+    * @return Some(Ipv4Address) if valid, None otherwise
+    */
   def from(bytes: Array[Byte]): Either[AddressError, Ipv4Address] =
     if bytes.length != 4 then Left(AddressError.InvalidIpv4("<bytes>", s"expected 4 bytes, got ${bytes.length}"))
     else
@@ -235,5 +210,6 @@ object Ipv4Address:
     private def appendDec(out: Appendable, value: Int): Unit =
       out.append(java.lang.Integer.toString(value))
       ()
+  end extension
 
 end Ipv4Address

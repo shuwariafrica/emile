@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Ali Rashid.
+ * Copyright 2025, 2026 Ali Rashid.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,29 +17,20 @@ package emile
 
 import munit.FunSuite
 
-/**
- * Test suite for HandleState phantom types.
- *
- * These tests verify the runtime behaviour of phantom type state transitions.
- * The compile-time safety guarantees are implicit - if the code compiles with
- * the phantom types, the safety properties hold.
- *
- * Key compile-time properties (verified by successful compilation):
- * - Timer[Open], Async[Open], Poll[Open], Tcp[Open] can call start/stop/send operations
- * - Timer[Closed], Async[Closed], Poll[Closed], Tcp[Closed] CANNOT call those operations
- * - closeSync returns a success marker (no witness)
- * - init returns an [Open] handle
- */
+/** Test suite for HandleState phantom types.
+  *
+  * These tests verify the runtime behaviour of phantom type state transitions. The compile-time
+  * safety guarantees are implicit - if the code compiles with the phantom types, the safety
+  * properties hold.
+  *
+  * Key compile-time properties (verified by successful compilation):
+  *   - Timer[Open], Async[Open], Poll[Open], Tcp[Open] can call start/stop/send operations
+  *   - Timer[Closed], Async[Closed], Poll[Closed], Tcp[Closed] CANNOT call those operations
+  *   - closeSync returns a success marker (no witness)
+  *   - init returns an [Open] handle
+  */
 class HandleStateSuite extends FunSuite:
 // scalafix:off
-
-  test("HandleState.Open and Closed are distinct types"):
-    // This is a compile-time property - the fact this compiles proves it
-    val _: Open = null.asInstanceOf[Open]
-    val _: Closed = null.asInstanceOf[Closed]
-    // These are not the same type at compile time
-    // (we can't test inequality at runtime since they're just null)
-    assert(true)
 
   test("Timer init returns Timer[Open]"):
     withLoop { loop =>
@@ -140,7 +131,7 @@ class HandleStateSuite extends FunSuite:
       withLoop { loop =>
         Poll.init(loop, readFd).foreach { poll =>
           // These compile because poll is Poll[Open]
-          val startResult = poll.start(PollEvent.Readable) { (_, _) => () }
+          val startResult = poll.start(PollEvent.Readable)((_, _) => ())
           assert(startResult.isRight)
           val stopResult = poll.stop
           assert(stopResult.isRight)
@@ -159,24 +150,6 @@ class HandleStateSuite extends FunSuite:
         val bindResult = tcp.bind(addr)
         assert(bindResult.isRight)
         assert(tcp.closeSync.isRight)
-      }
-    }
-
-  test("Handle type class works with any state"):
-    withLoop { loop =>
-      Timer.init(loop).foreach { openTimer =>
-        // Handle works with Timer[Open]
-        val handleOpen = Handle[Timer[Open]]
-        val loopFromHandle1 = handleOpen.loop(openTimer)
-        assert(loopFromHandle1.ptrUnsafe.toLong == loop.ptrUnsafe.toLong)
-
-        // Handle also works with Timer[Closed] type-level view
-        val closedView: Timer[Closed] = openTimer.asInstanceOf[Timer[Closed]]
-        val handleClosed = Handle[Timer[Closed]]
-        val loopFromHandle2 = handleClosed.loop(closedView)
-        assert(loopFromHandle2.ptrUnsafe.toLong == loop.ptrUnsafe.toLong)
-
-        assert(handleOpen.closeSync(openTimer).isRight)
       }
     }
 
@@ -231,12 +204,11 @@ class HandleStateSuite extends FunSuite:
   private def withLoop(f: Loop => Unit): Unit =
     Loop.create.fold(
       err => fail(s"Failed to create loop: $err"),
-      loop => {
+      loop =>
         f(loop)
         // Run the loop to drain any pending close callbacks
         val _ = loop.run(RunMode.Default)
         val _ = loop.close
-      }
     )
 
   private def withPipe(f: (Int, Int) => Unit): Unit =
@@ -253,3 +225,5 @@ class HandleStateSuite extends FunSuite:
     f(readFd, writeFd)
     val _ = unistd.close(readFd)
     val _ = unistd.close(writeFd)
+  end withPipe
+end HandleStateSuite

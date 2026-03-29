@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Ali Rashid.
+ * Copyright 2025, 2026 Ali Rashid.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,39 +17,43 @@ package emile.ipa
 
 // scalafix:off DisableSyntax.var, DisableSyntax.while, DisableSyntax.return; performance-critical IPv6 parsing
 
+import boilerplate.*
 import boilerplate.nullable.*
 
-/**
- * IPv6 address represented as two 64-bit integers.
- *
- * This is a zero-cost opaque type wrapping `(Long, Long)`. The high Long
- * contains the first 64 bits, the low Long contains the last 64 bits.
- *
- * == Construction ==
- *
- * {{{
- * // From string (runtime validation)
- * val addr: Either[AddressError, Ipv6Address] = Ipv6Address.from("::1")
- * val full: Either[AddressError, Ipv6Address] = Ipv6Address.from("2001:db8::1")
- *
- * // From raw Longs (unchecked)
- * val raw = Ipv6Address.fromLongs(highBits, lowBits)
- * }}}
- *
- * == Well-known Addresses ==
- *
- * {{{
- * Ipv6Address.Wildcard // ::
- * Ipv6Address.Loopback // ::1
- * }}}
- */
+/** IPv6 address represented as two 64-bit integers.
+  *
+  * This is a zero-cost opaque type wrapping `(Long, Long)`. The high Long contains the first 64
+  * bits, the low Long contains the last 64 bits.
+  *
+  * ==Construction==
+  *
+  * {{{
+  * // From string (runtime validation)
+  * val addr: Either[AddressError, Ipv6Address] = Ipv6Address.from("::1")
+  * val full: Either[AddressError, Ipv6Address] = Ipv6Address.from("2001:db8::1")
+  *
+  * // From raw Longs (unchecked)
+  * val raw = Ipv6Address.fromLongs(highBits, lowBits)
+  * }}}
+  *
+  * ==Well-known Addresses==
+  *
+  * {{{
+  * Ipv6Address.Wildcard // ::
+  * Ipv6Address.Loopback // ::1
+  * }}}
+  */
 opaque type Ipv6Address = (Long, Long)
 
-object Ipv6Address:
-  given CanEqual[Ipv6Address, Ipv6Address] = CanEqual.derived
+object Ipv6Address extends OpaqueType[Ipv6Address, (Long, Long)], OpaqueType.Eq[Ipv6Address]:
+  type Error = AddressError
+
+  inline def wrap(value: (Long, Long)): Ipv6Address = value
+  inline def unwrap(addr: Ipv6Address): (Long, Long) = addr
+  protected inline def validate(value: (Long, Long)): Option[AddressError] = None
+  inline def apply(inline value: (Long, Long)): Ipv6Address = value
 
   given Ordering[Ipv6Address] =
-    // Unsigned comparison of high then low
     (x, y) =>
       val cmpHigh = java.lang.Long.compareUnsigned(x._1, y._1)
       if cmpHigh != 0 then cmpHigh
@@ -61,9 +65,7 @@ object Ipv6Address:
   /** Loopback address ::1. */
   val Loopback: Ipv6Address = (0L, 1L)
 
-  /**
-   * Parse an IPv6 address from string with error details.
-   */
+  /** Parse an IPv6 address from string with error details. */
   def from(value: String): Either[AddressError, Ipv6Address] =
     parseIpv6(value)
 
@@ -89,6 +91,7 @@ object Ipv6Address:
                     (groups(6).toLong << 16) |
                     groups(7).toLong
                 Right((high, low))
+            end match
           }
         catch
           case _: NumberFormatException =>
@@ -97,26 +100,22 @@ object Ipv6Address:
 
   private def parseIpv6Groups(value: String): Either[AddressError, Array[Int]] =
     // Check for invalid patterns first
-    if value.contains(":::") then
-      return Left(AddressError.InvalidIpv6(value, "triple colon not allowed"))
-    
+    if value.contains(":::") then return Left(AddressError.InvalidIpv6(value, "triple colon not allowed"))
+
     val doubleColonIndex = value.indexOf("::")
-    
+
     // Check for multiple :: occurrences
     if doubleColonIndex >= 0 && value.indexOf("::", doubleColonIndex + 2) >= 0 then
       return Left(AddressError.InvalidIpv6(value, "multiple :: not allowed"))
-    
+
     if doubleColonIndex < 0 then
       // No compression - must have exactly 8 groups
       val parts = value.split(':')
-      if parts.length != 8 then
-        Left(AddressError.InvalidIpv6(value, s"expected 8 groups, got ${parts.length}"))
-      else 
+      if parts.length != 8 then Left(AddressError.InvalidIpv6(value, s"expected 8 groups, got ${parts.length}"))
+      else
         // Check for empty groups
-        if parts.exists(_.isEmpty) then
-          Left(AddressError.InvalidIpv6(value, "empty group not allowed without ::"))
-        else
-          Right(parts.map(p => java.lang.Integer.parseUnsignedInt(p, 16)))
+        if parts.exists(_.isEmpty) then Left(AddressError.InvalidIpv6(value, "empty group not allowed without ::"))
+        else Right(parts.map(p => java.lang.Integer.parseUnsignedInt(p, 16)))
     else
       // Has compression
       val prefix =
@@ -134,44 +133,36 @@ object Ipv6Address:
       else
         val zeroCount = 8 - totalGroups
         Right(prefixNums ++ Array.fill(zeroCount)(0) ++ suffixNums)
+    end if
+  end parseIpv6Groups
 
-  /**
-   * Construct from two 64-bit integers.
-   *
-   * @param high
-   *   The high 64 bits
-   * @param low
-   *   The low 64 bits
-   * @return
-   *   The IPv6 address
-   */
+  /** Construct from two 64-bit integers.
+    *
+    * @param high The high 64 bits
+    * @param low The low 64 bits
+    * @return The IPv6 address
+    */
   inline def fromLongs(high: Long, low: Long): Ipv6Address = (high, low)
 
-  /**
-   * Construct from byte array (must be exactly 16 bytes, network order).
-   *
-   * @param bytes
-   *   The 16-byte array
-   * @return
-   *   Some(Ipv6Address) if valid, None otherwise
-   */
+  /** Construct from byte array (must be exactly 16 bytes, network order).
+    *
+    * @param bytes The 16-byte array
+    * @return Some(Ipv6Address) if valid, None otherwise
+    */
   def from(bytes: Array[Byte]): Either[AddressError, Ipv6Address] =
     if bytes.length != 16 then Left(AddressError.InvalidIpv6("<bytes>", s"expected 16 bytes, got ${bytes.length}"))
     else
       var high = 0L
-      var low  = 0L
+      var low = 0L
       for i <- 0 until 8 do high = (high << 8) | (bytes(i) & 0xff)
       for i <- 8 until 16 do low = (low << 8) | (bytes(i) & 0xff)
       Right((high, low))
 
-  /**
-   * Create an IPv4-mapped IPv6 address (::ffff:a.b.c.d).
-   *
-   * @param ipv4
-   *   The IPv4 address to map
-   * @return
-   *   The IPv4-mapped IPv6 address
-   */
+  /** Create an IPv4-mapped IPv6 address (::ffff:a.b.c.d).
+    *
+    * @param ipv4 The IPv4 address to map
+    * @return The IPv4-mapped IPv6 address
+    */
   def fromIpv4Mapped(ipv4: Ipv4Address): Ipv6Address =
     (0L, 0xffffL << 32 | (ipv4.toInt.toLong & 0xffffffffL))
 
@@ -185,8 +176,8 @@ object Ipv6Address:
     /** Convert to network order byte array. */
     def toBytes: Array[Byte] =
       val bytes = new Array[Byte](16)
-      var h     = addr._1
-      var l     = addr._2
+      var h = addr._1
+      var l = addr._2
       for i <- 7 to 0 by -1 do
         bytes(i) = (h & 0xff).toByte
         h = h >>> 8
@@ -195,11 +186,10 @@ object Ipv6Address:
         l = l >>> 8
       bytes
 
-    /**
-     * RFC 5952 canonical string representation.
-     *
-     * Uses :: compression for the longest run of zeros, lowercase hex.
-     */
+    /** RFC 5952 canonical string representation.
+      *
+      * Uses :: compression for the longest run of zeros, lowercase hex.
+      */
     def show: String =
       val sb = new java.lang.StringBuilder
       writeTo(sb): Unit
@@ -217,10 +207,10 @@ object Ipv6Address:
       groups(6) = ((addr._2 >>> 16) & 0xffff).toInt
       groups(7) = (addr._2 & 0xffff).toInt
 
-      var bestStart  = -1
+      var bestStart = -1
       var bestLength = 0
-      var runStart   = -1
-      var runLength  = 0
+      var runStart = -1
+      var runLength = 0
 
       for i <- 0 until 8 do
         if groups(i) == 0 then
@@ -237,7 +227,7 @@ object Ipv6Address:
         bestStart = runStart
         bestLength = runLength
 
-      var i  = 0
+      var i = 0
       var afterCompression = false
       while i < 8 do
         if i == bestStart then
@@ -245,12 +235,12 @@ object Ipv6Address:
           i += bestLength
           afterCompression = true
         else
-          if i > 0 && !afterCompression then
-            out.append(':'): Unit
+          if i > 0 && !afterCompression then out.append(':'): Unit
           afterCompression = false
           out.append(java.lang.Integer.toHexString(groups(i))): Unit
           i += 1
       out
+    end writeTo
 
     /** True if this is the loopback address (::1). */
     transparent inline def isLoopback: Boolean = addr._1 == 0L && addr._2 == 1L
@@ -272,5 +262,6 @@ object Ipv6Address:
     def toIpv4: Option[Ipv4Address] =
       if isIpv4Mapped then Some(Ipv4Address.fromInt((addr._2 & 0xffffffffL).toInt))
       else None
+  end extension
 
 end Ipv6Address

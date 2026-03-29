@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Ali Rashid.
+ * Copyright 2025, 2026 Ali Rashid.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,13 +15,11 @@
  */
 package emile
 
-/**
- * Handle type classification matching libuv's handle types.
- *
- * This enum maps to libuv's `uv_handle_type` enum. The `toLibuv` method
- * uses `inline match` for compile-time elimination when the handle type
- * is statically known.
- */
+/** Handle type classification matching libuv's handle types.
+  *
+  * This enum maps to libuv's `uv_handle_type` enum. The `toLibuv` method uses `inline match` for
+  * compile-time elimination when the handle type is statically known.
+  */
 enum HandleType derives CanEqual:
   case Async
   case Check
@@ -45,30 +43,29 @@ end HandleType
 object HandleType:
   // Inline constants for libuv handle type values
   // These enable compile-time elimination when used with inline match
-  private[emile] inline val UV_ASYNC      = 1
-  private[emile] inline val UV_CHECK      = 2
-  private[emile] inline val UV_FS_EVENT   = 3
-  private[emile] inline val UV_FS_POLL    = 4
-  private[emile] inline val UV_HANDLE     = 5
-  private[emile] inline val UV_IDLE       = 6
+  private[emile] inline val UV_ASYNC = 1
+  private[emile] inline val UV_CHECK = 2
+  private[emile] inline val UV_FS_EVENT = 3
+  private[emile] inline val UV_FS_POLL = 4
+  private[emile] inline val UV_HANDLE = 5
+  private[emile] inline val UV_IDLE = 6
   private[emile] inline val UV_NAMED_PIPE = 7
-  private[emile] inline val UV_POLL       = 8
-  private[emile] inline val UV_PREPARE    = 9
-  private[emile] inline val UV_PROCESS    = 10
-  private[emile] inline val UV_STREAM     = 11
-  private[emile] inline val UV_TCP        = 12
-  private[emile] inline val UV_TIMER      = 13
-  private[emile] inline val UV_TTY        = 14
-  private[emile] inline val UV_UDP        = 15
-  private[emile] inline val UV_SIGNAL     = 16
-  private[emile] inline val UV_UNKNOWN    = 0
+  private[emile] inline val UV_POLL = 8
+  private[emile] inline val UV_PREPARE = 9
+  private[emile] inline val UV_PROCESS = 10
+  private[emile] inline val UV_STREAM = 11
+  private[emile] inline val UV_TCP = 12
+  private[emile] inline val UV_TIMER = 13
+  private[emile] inline val UV_TTY = 14
+  private[emile] inline val UV_UDP = 15
+  private[emile] inline val UV_SIGNAL = 16
+  private[emile] inline val UV_UNKNOWN = 0
 
-  /**
-   * Convert from libuv handle type integer.
-   *
-   * @param value The libuv UV_*_T constant
-   * @return The corresponding HandleType
-   */
+  /** Convert from libuv handle type integer.
+    *
+    * @param value The libuv UV_*_T constant
+    * @return The corresponding HandleType
+    */
   private[emile] def fromLibuv(value: Int): HandleType = value match
     case UV_ASYNC      => Async
     case UV_CHECK      => Check
@@ -88,15 +85,14 @@ object HandleType:
     case UV_SIGNAL     => Signal
     case _             => Unknown
 
-  /**
-   * Convert to libuv handle type integer with compile-time elimination.
-   *
-   * When called with a statically known HandleType (e.g., `HandleType.Timer.toLibuvInline`),
-   * the match is eliminated at compile time and replaced with the literal constant.
-   *
-   * @param ht The handle type (must be inline for compile-time elimination)
-   * @return The libuv UV_* constant value
-   */
+  /** Convert to libuv handle type integer with compile-time elimination.
+    *
+    * When called with a statically known HandleType (e.g., `HandleType.Timer.toLibuvInline`), the
+    * match is eliminated at compile time and replaced with the literal constant.
+    *
+    * @param ht The handle type (must be inline for compile-time elimination)
+    * @return The libuv UV_* constant value
+    */
   private[emile] inline def toLibuvInline(inline ht: HandleType): Int = inline ht match
     case Async     => UV_ASYNC
     case Check     => UV_CHECK
@@ -117,18 +113,16 @@ object HandleType:
     case Unknown   => UV_UNKNOWN
 
   extension (ht: HandleType)
-    /**
-     * Convert to libuv handle type integer for use with uv_handle_size.
-     *
-     * Based on libuv's uv_handle_type enum in uv.h:
-     * UV_UNKNOWN_HANDLE = 0, then UV_HANDLE_TYPE_MAP expands to:
-     * UV_ASYNC = 1, UV_CHECK = 2, ..., UV_TIMER = 13, etc.
-     *
-     * Note: For compile-time elimination when the type is statically known,
-     * use `HandleType.toLibuvInline(HandleType.Timer)` instead.
-     *
-     * @return The libuv UV_* constant value
-     */
+    /** Convert to libuv handle type integer for use with uv_handle_size.
+      *
+      * Based on libuv's uv_handle_type enum in uv.h: UV_UNKNOWN_HANDLE = 0, then UV_HANDLE_TYPE_MAP
+      * expands to: UV_ASYNC = 1, UV_CHECK = 2, ..., UV_TIMER = 13, etc.
+      *
+      * Note: For compile-time elimination when the type is statically known, use
+      * `HandleType.toLibuvInline(HandleType.Timer)` instead.
+      *
+      * @return The libuv UV_* constant value
+      */
     private[emile] def toLibuv: Int = ht match
       case Async     => UV_ASYNC
       case Check     => UV_CHECK
@@ -147,4 +141,5 @@ object HandleType:
       case Udp       => UV_UDP
       case Signal    => UV_SIGNAL
       case Unknown   => UV_UNKNOWN
+  end extension
 end HandleType

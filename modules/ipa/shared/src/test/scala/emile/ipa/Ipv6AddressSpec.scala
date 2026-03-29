@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Ali Rashid.
+ * Copyright 2025, 2026 Ali Rashid.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,22 +17,21 @@ package emile.ipa
 
 import munit.FunSuite
 
-/**
- * Tests for Ipv6Address opaque type.
- *
- * Tests cover:
- * - from: parsing with :: compression
- * - fromLongs: high/low bits construction
- * - from: byte array parsing
- * - fromIpv4Mapped: IPv4-mapped IPv6 construction
- * - highBits / lowBits: extraction
- * - toBytes: byte array extraction
- * - show: string representation with :: compression
- * - Boolean properties: isLoopback, isLinkLocal, isMulticast, isIpv4Mapped, isWildcard
- * - toIpv4: extraction of mapped IPv4
- * - Constants: Wildcard, Loopback
- * - Ordering: unsigned comparison
- */
+/** Tests for Ipv6Address opaque type.
+  *
+  * Tests cover:
+  *   - from: parsing with :: compression
+  *   - fromLongs: high/low bits construction
+  *   - from: byte array parsing
+  *   - fromIpv4Mapped: IPv4-mapped IPv6 construction
+  *   - highBits / lowBits: extraction
+  *   - toBytes: byte array extraction
+  *   - show: string representation with :: compression
+  *   - Boolean properties: isLoopback, isLinkLocal, isMulticast, isIpv4Mapped, isWildcard
+  *   - toIpv4: extraction of mapped IPv4
+  *   - Constants: Wildcard, Loopback
+  *   - Ordering: unsigned comparison
+  */
 class Ipv6AddressSpec extends FunSuite:
 // scalafix:off
 
@@ -220,7 +219,7 @@ class Ipv6AddressSpec extends FunSuite:
   test("Ipv6Address.toBytes for all-ones address"):
     val addr = Ipv6Address.fromLongs(-1L, -1L)
     val bytes = addr.toBytes
-    bytes.foreach(b => assertEquals((b & 0xff), 255))
+    bytes.foreach(b => assertEquals(b & 0xff, 255))
 
   // ============================================================
   // show tests - :: compression algorithm
@@ -422,7 +421,7 @@ val bad = ipv6"fe8g::${1}"
     assert(Ordering[Ipv6Address].lt(low, high))
 
   test("Ipv6Address.Ordering compares high bits first"):
-    val a = Ipv6Address.fromLongs(1L, 0xFFFFFFFF_FFFFFFFFL)
+    val a = Ipv6Address.fromLongs(1L, 0xffffffff_ffffffffL)
     val b = Ipv6Address.fromLongs(2L, 0L)
     assert(Ordering[Ipv6Address].lt(a, b))
 

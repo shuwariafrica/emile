@@ -1,6 +1,6 @@
 inThisBuild(
   List(
-    scalaVersion := "3.7.4",
+    scalaVersion := "3.8.2",
     organization := "io.github.arashi01",
     description := "Scala Native async I/O library backed by libuv.",
     startYear := Some(2025),
@@ -10,8 +10,6 @@ inThisBuild(
     dynver := versionSetting.toTaskable.toTask.value,
     versionScheme := Some("semver-spec"),
     licenses := List("Apache-2.0" -> url("https://www.apache.org/licenses/LICENSE-2.0.txt")),
-    sonatypeCredentialHost := Sonatype.sonatypeCentralHost,
-    publishCredentials,
     scmInfo := Some(
       ScmInfo(
         url("https://github.com/arashi01/emile"),
@@ -23,48 +21,41 @@ inThisBuild(
 )
 
 val libraries = new {
-  val boilerplate = Def.setting("io.github.arashi01" %%% "boilerplate" % "0.2.0")
+  val boilerplate = Def.setting("io.github.arashi01" %%% "boilerplate" % "0.7.0")
   val `boilerplate-effect` = boilerplate(_.withName("boilerplate-effect"))
   val cats = Def.setting("org.typelevel" %%% "cats-core" % "2.13.0")
-  val `cats-effect` = Def.setting("org.typelevel" %%% "cats-effect" % "3.7.0-RC1")
-  val fs2 = Def.setting("co.fs2" %%% "fs2-core" % "3.13.0-M7")
+  val `cats-effect` = Def.setting("org.typelevel" %%% "cats-effect" % "3.7.0")
+  val fs2 = Def.setting("co.fs2" %%% "fs2-core" % "3.13.0")
 
   // Testing
-  val `munit-cats-effect` = Def.setting("org.typelevel" %%% "munit-cats-effect" % "2.2.0-RC1")
-  val munit = Def.setting("org.scalameta" %%% "munit" % "1.2.1")
+  val `munit-cats-effect` = Def.setting("org.typelevel" %%% "munit-cats-effect" % "2.2.0")
+  val munit = Def.setting("org.scalameta" %%% "munit" % "1.2.4")
   val `scala-java-time` = Def.setting("io.github.cquiroz" %%% "scala-java-time" % "2.6.0")
 }
-
-// =============================================================================
-// emile-ipa: Cross-platform IP address library (JVM, JS, Native)
-// =============================================================================
 
 lazy val `emile-ipa` = crossProject(JVMPlatform, JSPlatform, NativePlatform)
   .crossType(CrossType.Full)
   .withoutSuffixFor(NativePlatform)
   .in(file("modules/ipa"))
-  .settings(description := "Pure Scala IP addressing primitives library.")
   .settings(compilerSettings)
   .settings(unitTestSettings)
   .settings(fileHeaderSettings)
   .settings(publishSettings)
   .settings(libraryDependencies += libraries.boilerplate.value)
-  .settings(
-    description := "Cross-platform IP address and socket address types for Scala 3"
-  )
+  .settings(description := "Cross-platform IP address and socket address types for Scala 3.")
 
 val `emile-core` =
   project
     .in(file("modules/core"))
     .enablePlugins(ScalaNativePlugin)
     .dependsOn(`emile-ipa`.native)
-    .settings(description := "Scala Native libuv wrappers and FFI bindings.")
+    .settings(description := "Scala Native libuv bindings and handle abstractions.")
     .settings(compilerSettings)
     .settings(unitTestSettings)
     .settings(fileHeaderSettings)
     .settings(publishSettings)
     .settings(libraryDependencies += libraries.boilerplate.value)
-
+    .settings(Test / parallelExecution := false)
 
 val `emile-cats` =
   project
@@ -72,7 +63,7 @@ val `emile-cats` =
     .enablePlugins(ScalaNativePlugin)
     .dependsOn(`emile-ipa`.native)
     .dependsOn(`emile-core`)
-    .settings(description := "Scala Native async I/O library backed by libuv and cats-effect.")
+    .settings(description := "Scala Native cats-effect async I/O runtime backed by libuv.")
     .settings(compilerSettings)
     .settings(unitTestSettings)
     .settings(fileHeaderSettings)
@@ -83,7 +74,6 @@ val `emile-cats` =
     .settings(libraryDependencies += libraries.`scala-java-time`.value % Test)
     .settings(libraryDependencies += libraries.`munit-cats-effect`.value % Test)
 
-
 val `emile-native` =
   project
     .in(file(".aggregate/native"))
@@ -91,7 +81,7 @@ val `emile-native` =
     .aggregate(
       `emile-ipa`.native,
       `emile-core`,
-      `emile-cats`,
+      `emile-cats`
     )
 
 val `emile-jvm` =
@@ -99,7 +89,7 @@ val `emile-jvm` =
     .in(file(".aggregate/jvm"))
     .settings(publish / skip := true)
     .aggregate(
-      `emile-ipa`.jvm,
+      `emile-ipa`.jvm
     )
 
 val `emile-js` =
@@ -107,9 +97,8 @@ val `emile-js` =
     .in(file(".aggregate/js"))
     .settings(publish / skip := true)
     .aggregate(
-      `emile-ipa`.js,
+      `emile-ipa`.js
     )
-
 
 val `emile-root` =
   project
@@ -118,7 +107,7 @@ val `emile-root` =
     .aggregate(
       `emile-native`,
       `emile-jvm`,
-      `emile-js`,
+      `emile-js`
     )
 
 def baseCompilerOptions = List(
@@ -151,13 +140,13 @@ def baseCompilerOptions = List(
   // Scala 3-specific checks
   "-Yrequire-targetName",
   "-Ycheck-reentrant",
-  "-Ycheck-mods",
-  "-Xcheck-macros",
+  "-Ycheck-mods"
 )
 
 def compilerOptions = baseCompilerOptions ++ List(
   "-Yexplicit-nulls",
-  "-Xfatal-warnings"
+  "-Xcheck-macros",
+  "-Werror"
 )
 
 def compilerSettings = List(
@@ -174,7 +163,7 @@ def formattingSettings = List(
 
 def unitTestSettings: List[Setting[?]] = List(
   libraryDependencies ++= List(
-    libraries.`munit`.value % Test,
+    libraries.munit.value % Test
   ),
   testFrameworks += new TestFramework("munit.Framework")
 )
@@ -193,23 +182,10 @@ def fileHeaderSettings: List[Setting[?]] =
     headerEmptyLine := false
   )
 
-def publishCredentials: Setting[Task[Seq[Credentials]]] = credentials :=
-  (for {
-    user <- Option(System.getenv("PUBLISH_USER"))
-    pass <- Option(System.getenv("PUBLISH_USER_PASSPHRASE"))
-  } yield Credentials(
-    "Sonatype Nexus Repository Manager",
-    sonatypeCredentialHost.value,
-    user,
-    pass
-  )).toSeq
-
 def pgpSettings: List[Setting[?]] = List(
   PgpKeys.pgpSelectPassphrase := None,
   usePgpKeyHex(System.getenv("SIGNING_KEY_ID"))
 )
-
-def platformSourceDirectory(platform: String): Setting[Seq[File]] = sourceDirectories += (sourceDirectory.value / platform)
 
 def versionSetting: Def.Initialize[String] = Def.setting(
   dynverGitDescribeOutput.value.mkVersion(
@@ -233,14 +209,18 @@ def versionSetting: Def.Initialize[String] = Def.setting(
   )
 )
 
-def publishSettings: List[Setting[?]] = publishCredentials +: pgpSettings ++: List(
+def publishSettings: List[Setting[?]] = pgpSettings ++: aetherSettings ++: List(
   packageOptions += Package.ManifestAttributes(
     "Build-Jdk" -> System.getProperty("java.version"),
     "Specification-Title" -> name.value,
     "Specification-Version" -> Keys.version.value,
     "Implementation-Title" -> name.value
   ),
-  publishTo := sonatypePublishToBundle.value,
+  publishTo := {
+    if (Keys.version.value.toLowerCase.contains("snapshot"))
+      Some("central-snapshots".at("https://central.sonatype.com/repository/maven-snapshots/"))
+    else localStaging.value
+  },
   pomIncludeRepository := (_ => false),
   publishMavenStyle := true,
   developers := List(
@@ -253,5 +233,17 @@ def publishSettings: List[Setting[?]] = publishCredentials +: pgpSettings ++: Li
   )
 )
 
+// Maven-native snapshot deployment via sbt-aether-deploy (timestamped SNAPSHOTs with maven-metadata.xml)
+def aetherSettings: List[Setting[?]] = List(
+  credentials ++= {
+    val user = sys.env.get("SONATYPE_USERNAME")
+    val pass = sys.env.get("SONATYPE_PASSWORD")
+    (user, pass) match {
+      case (Some(u), Some(p)) => List(Credentials("central-snapshots", "central.sonatype.com", u, p))
+      case _                  => Nil
+    }
+  }
+)
+
 addCommandAlias("format", "scalafixAll; scalafmtAll; scalafmtSbt; headerCreateAll")
-addCommandAlias("staticCheck", "scalafixAll --check; scalafmtCheckAll; scalafmtSbtCheck; headerCheckAll")
+addCommandAlias("check", "scalafixAll --check; scalafmtCheckAll; scalafmtSbtCheck; headerCheckAll")

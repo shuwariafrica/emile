@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Ali Rashid.
+ * Copyright 2025, 2026 Ali Rashid.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,203 +29,167 @@ import boilerplate.nullable.*
 
 import emile.ipa.SocketAddress
 import emile.ipa.fromSockAddr
-import emile.unsafe.CallbackRegistry
+import emile.unsafe.CallbackStore
 import emile.unsafe.LibUV
 
-/**
- * DNS resolution utilities backed by libuv's uv_getaddrinfo.
- *
- * Unlike libuv handle types, DNS resolution uses a request-based pattern.
- * The request is submitted and a callback is invoked when resolution
- * completes. This avoids blocking the event loop during DNS lookups.
- *
- * == Usage Example ==
- *
- * {{{
- * // Resolve a hostname asynchronously
- * Dns.getAddrInfo(loop, "example.com", "http") { result =>
- *   result match
- *     case Right(addresses) =>
- *       addresses.foreach(addr => println(s"Resolved: ${addr.show}"))
- *     case Left(error) =>
- *       println(s"Resolution failed: $error")
- * }
- *
- * // Run the loop to process the request
- * loop.run(RunMode.Default)
- * }}}
- *
- * == Thread Safety ==
- *
- * DNS resolution callbacks are always invoked from the event loop thread.
- * The underlying libuv implementation may use a thread pool for the
- * actual DNS lookup, but results are delivered via the event loop.
- */
+/** DNS resolution utilities backed by libuv's uv_getaddrinfo.
+  *
+  * Unlike libuv handle types, DNS resolution uses a request-based pattern. The request is submitted
+  * and a callback is invoked when resolution completes. This avoids blocking the event loop during
+  * DNS lookups.
+  *
+  * ==Usage Example==
+  *
+  * {{{
+  * // Resolve a hostname asynchronously
+  * Dns.getAddrInfo(loop, "example.com", "http") { result =>
+  *   result match
+  *     case Right(addresses) =>
+  *       addresses.foreach(addr => println(s"Resolved: ${addr.show}"))
+  *     case Left(error) =>
+  *       println(s"Resolution failed: $error")
+  * }
+  *
+  * // Run the loop to process the request
+  * loop.run(RunMode.Default)
+  * }}}
+  *
+  * ==Thread Safety==
+  *
+  * DNS resolution callbacks are always invoked from the event loop thread. The underlying libuv
+  * implementation may use a thread pool for the actual DNS lookup, but results are delivered via
+  * the event loop.
+  */
 object Dns:
-  // Request type constant for uv_req_size.
-  // Note: Cannot be inline val because toLibuv is not a literal constant.
-  // TODO: Add RequestType.toLibuvInline for compile-time elimination.
   private val UV_GETADDRINFO = RequestType.GetAddrInfo.toLibuv
 
   // Null pointer constant for FFI calls (required due to -Yexplicit-nulls)
   private val nullPtr: Ptr[Byte] = null.asInstanceOf[Ptr[Byte]]
 
-  /**
-   * Asynchronously resolve a hostname.
-   *
-   * The callback will be invoked with either an error or a list of resolved
-   * socket addresses when the DNS lookup completes.
-   *
-   * @param loop The event loop
-   * @param node The hostname to resolve (e.g., "example.com")
-   * @param service The service name or port number (e.g., "http", "80")
-   * @param callback Callback invoked with the resolution result
-   * @return Either an error (if the request couldn't be initiated) or Unit
-   */
+  /** Asynchronously resolve a hostname.
+    *
+    * The callback will be invoked with either an error or a list of resolved socket addresses when
+    * the DNS lookup completes.
+    *
+    * @param loop The event loop
+    * @param node The hostname to resolve (e.g., "example.com")
+    * @param service The service name or port number (e.g., "http", "80")
+    * @param callback Callback invoked with the resolution result
+    * @return Either an error (if the request couldn't be initiated) or Unit
+    */
   def getAddrInfo(loop: Loop, node: String, service: String)(
-      callback: Either[EmileError, List[SocketAddress]] => Unit
+    callback: Either[EmileError, List[SocketAddress]] => Unit
   ): Either[EmileError, Unit] =
     val size = LibUV.uv_req_size(UV_GETADDRINFO)
     calloc(1L, size.toLong).either(EmileError.OutOfMemory).flatMap { req =>
       Zone {
-        // Register callback and store loop + callback ID in request context
-        val loopPtr = loop.ptrUnsafe
-        val callbackId = CallbackRegistry.registerLoop(loopPtr, callback)
-        CallbackRegistry.encodeRequest(loopPtr, callbackId).either(EmileError.OutOfMemory) match
-          case Left(err) =>
-            val _ = CallbackRegistry.unregister(loopPtr, callbackId)
-            free(req)
-            Left(err)
-          case Right(ctx) =>
-            LibUV.uv_req_set_data(req, ctx)
+        CallbackStore.attachReq(req, callback)
 
-            val nodeC = toCString(node)
-            val serviceC = if service.isEmpty then nullPtr.asInstanceOf[CString] else toCString(service)
+        val nodeC = toCString(node)
+        val serviceC = if service.isEmpty then nullPtr.asInstanceOf[CString] else toCString(service)
 
-            val result = LibUV.uv_getaddrinfo(
-              loopPtr,
-              req,
-              getAddrInfoCallback,
-              nodeC,
-              serviceC,
-              nullPtr // No hints - resolve all address families
-            )
+        val result = LibUV.uv_getaddrinfo(
+          loop.ptrUnsafe,
+          req,
+          getAddrInfoCallback,
+          nodeC,
+          serviceC,
+          nullPtr // No hints - resolve all address families
+        )
 
-            if result < 0 then
-              // Clean up on failure
-              val _ = CallbackRegistry.unregister(loopPtr, callbackId)
-              CallbackRegistry.freeRequest(ctx)
-              free(req)
-              Left(EmileError.fromErrorCode(ErrorCode(result)))
-            else
-              Right(())
+        if result < 0 then
+          // Clean up on failure
+          val _ = CallbackStore.detachReq[Either[EmileError, List[SocketAddress]] => Unit](req)
+          free(req)
+          Left(EmileError.fromErrorCode(ErrorCode(result)))
+        else Right(())
       }
     }
+  end getAddrInfo
 
-  /**
-   * Asynchronously resolve a hostname (service optional).
-   *
-   * @param loop The event loop
-   * @param node The hostname to resolve
-   * @param callback Callback invoked with the resolution result
-   * @return Either an error or Unit
-   */
+  /** Asynchronously resolve a hostname (service optional).
+    *
+    * @param loop The event loop
+    * @param node The hostname to resolve
+    * @param callback Callback invoked with the resolution result
+    * @return Either an error or Unit
+    */
   def getAddrInfo(loop: Loop, node: String)(
-      callback: Either[EmileError, List[SocketAddress]] => Unit
+    callback: Either[EmileError, List[SocketAddress]] => Unit
   ): Either[EmileError, Unit] =
     val size = LibUV.uv_req_size(UV_GETADDRINFO)
     calloc(1L, size.toLong).either(EmileError.OutOfMemory).flatMap { req =>
       Zone {
-        val loopPtr = loop.ptrUnsafe
-        val callbackId = CallbackRegistry.registerLoop(loopPtr, callback)
-        CallbackRegistry.encodeRequest(loopPtr, callbackId).either(EmileError.OutOfMemory) match
-          case Left(err) =>
-            val _ = CallbackRegistry.unregister(loopPtr, callbackId)
-            free(req)
-            Left(err)
-          case Right(ctx) =>
-            LibUV.uv_req_set_data(req, ctx)
+        CallbackStore.attachReq(req, callback)
 
-            val nodeC = toCString(node)
+        val nodeC = toCString(node)
 
-            val result = LibUV.uv_getaddrinfo(
-              loopPtr,
-              req,
-              getAddrInfoCallback,
-              nodeC,
-              nullPtr.asInstanceOf[CString], // No service
-              nullPtr // No hints
-            )
+        val result = LibUV.uv_getaddrinfo(
+          loop.ptrUnsafe,
+          req,
+          getAddrInfoCallback,
+          nodeC,
+          nullPtr.asInstanceOf[CString], // No service
+          nullPtr // No hints
+        )
 
-            if result < 0 then
-              val _ = CallbackRegistry.unregister(loopPtr, callbackId)
-              CallbackRegistry.freeRequest(ctx)
-              free(req)
-              Left(EmileError.fromErrorCode(ErrorCode(result)))
-            else
-              Right(())
+        if result < 0 then
+          val _ = CallbackStore.detachReq[Either[EmileError, List[SocketAddress]] => Unit](req)
+          free(req)
+          Left(EmileError.fromErrorCode(ErrorCode(result)))
+        else Right(())
       }
     }
+  end getAddrInfo
 
-  /**
-   * Asynchronously resolve a hostname with hints.
-   *
-   * @param loop The event loop
-   * @param node The hostname to resolve
-   * @param service The service name or port number
-   * @param family Address family hint (AF_INET, AF_INET6, or AF_UNSPEC)
-   * @param socktype Socket type hint (SOCK_STREAM for TCP, SOCK_DGRAM for UDP)
-   * @param callback Callback invoked with the resolution result
-   * @return Either an error or Unit
-   */
+  /** Asynchronously resolve a hostname with hints.
+    *
+    * @param loop The event loop
+    * @param node The hostname to resolve
+    * @param service The service name or port number
+    * @param family Address family hint (AF_INET, AF_INET6, or AF_UNSPEC)
+    * @param socktype Socket type hint (SOCK_STREAM for TCP, SOCK_DGRAM for UDP)
+    * @param callback Callback invoked with the resolution result
+    * @return Either an error or Unit
+    */
   def getAddrInfoWithHints(loop: Loop, node: String, service: String, family: Int, socktype: Int)(
-      callback: Either[EmileError, List[SocketAddress]] => Unit
+    callback: Either[EmileError, List[SocketAddress]] => Unit
   ): Either[EmileError, Unit] =
     val size = LibUV.uv_req_size(UV_GETADDRINFO)
     calloc(1L, size.toLong).either(EmileError.OutOfMemory).flatMap { req =>
       Zone {
-        val loopPtr = loop.ptrUnsafe
-        val callbackId = CallbackRegistry.registerLoop(loopPtr, callback)
-        CallbackRegistry.encodeRequest(loopPtr, callbackId).either(EmileError.OutOfMemory) match
-          case Left(err) =>
-            val _ = CallbackRegistry.unregister(loopPtr, callbackId)
-            free(req)
-            Left(err)
-          case Right(ctx) =>
-            LibUV.uv_req_set_data(req, ctx)
+        CallbackStore.attachReq(req, callback)
 
-            val nodeC = toCString(node)
-            val serviceC = if service.isEmpty then nullPtr.asInstanceOf[CString] else toCString(service)
+        val nodeC = toCString(node)
+        val serviceC = if service.isEmpty then nullPtr.asInstanceOf[CString] else toCString(service)
 
-            // Allocate and initialize hints struct
-            val hints = alloc[addrinfo]()
-            hints._1 = 0 // ai_flags
-            hints._2 = family // ai_family
-            hints._3 = socktype // ai_socktype
-            hints._4 = 0 // ai_protocol
-            hints._5 = 0.toUInt // ai_addrlen
-            hints._6 = nullPtr.asInstanceOf[Ptr[sockaddr]] // ai_addr
-            hints._7 = nullPtr.asInstanceOf[CString] // ai_canonname
-            hints._8 = nullPtr // ai_next (CVoidPtr)
+        val hints = alloc[addrinfo]()
+        hints._1 = 0 // ai_flags
+        hints._2 = family // ai_family
+        hints._3 = socktype // ai_socktype
+        hints._4 = 0 // ai_protocol
+        hints._5 = 0.toUInt // ai_addrlen
+        hints._6 = nullPtr.asInstanceOf[Ptr[sockaddr]] // ai_addr
+        hints._7 = nullPtr.asInstanceOf[CString] // ai_canonname
+        hints._8 = nullPtr // ai_next (CVoidPtr)
 
-            val result = LibUV.uv_getaddrinfo(
-              loopPtr,
-              req,
-              getAddrInfoCallback,
-              nodeC,
-              serviceC,
-              hints.asInstanceOf[Ptr[Byte]]
-            )
+        val result = LibUV.uv_getaddrinfo(
+          loop.ptrUnsafe,
+          req,
+          getAddrInfoCallback,
+          nodeC,
+          serviceC,
+          hints.asInstanceOf[Ptr[Byte]]
+        )
 
-            if result < 0 then
-              val _ = CallbackRegistry.unregister(loopPtr, callbackId)
-              CallbackRegistry.freeRequest(ctx)
-              free(req)
-              Left(EmileError.fromErrorCode(ErrorCode(result)))
-            else
-              Right(())
+        if result < 0 then
+          val _ = CallbackStore.detachReq[Either[EmileError, List[SocketAddress]] => Unit](req)
+          free(req)
+          Left(EmileError.fromErrorCode(ErrorCode(result)))
+        else Right(())
       }
     }
+  end getAddrInfoWithHints
 
   /** Parse the addrinfo linked list into a list of SocketAddresses. */
   private def parseAddrInfo(addrinfo: Ptr[Byte]): List[SocketAddress] =
@@ -234,38 +198,29 @@ object Dns:
       if current == null then acc.reverse
       else
         val sockaddr = current._6 // ai_addr
-        val nextAddr = if sockaddr != null then
-          fromSockAddr(sockaddr) match
-            case Right(addr) => addr :: acc
-            case Left(_)     => acc // Skip invalid addresses
-        else acc
+        val nextAddr =
+          if sockaddr != null then
+            fromSockAddr(sockaddr) match
+              case Right(addr) => addr :: acc
+              case Left(_)     => acc // Skip invalid addresses
+          else acc
         val next = current._8.asInstanceOf[Ptr[addrinfo]] // ai_next
         loop(next, nextAddr)
 
     loop(addrinfo.asInstanceOf[Ptr[addrinfo]], Nil)
+  end parseAddrInfo
 
   /** Callback invoked by libuv when DNS resolution completes. */
   private val getAddrInfoCallback: LibUV.GetAddrInfoCB = (req: Ptr[Byte], status: CInt, res: Ptr[Byte]) =>
-    // Get request context which contains both loop pointer and callback ID
-    val ctx = LibUV.uv_req_get_data(req)
-    val loopPtr = CallbackRegistry.requestLoopPtr(ctx)
-    val callbackId = CallbackRegistry.requestCallbackId(ctx)
+    CallbackStore.detachReq[Either[EmileError, List[SocketAddress]] => Unit](req).foreach { callback =>
+      val result =
+        if status < 0 then Left(EmileError.fromErrorCode(ErrorCode(status)))
+        else Right(parseAddrInfo(res))
 
-    CallbackRegistry.findAs[Either[EmileError, List[SocketAddress]] => Unit](loopPtr, callbackId).foreach {
-      callback =>
-        val result =
-          if status < 0 then Left(EmileError.fromErrorCode(ErrorCode(status)))
-          else Right(parseAddrInfo(res))
+      if res != null then LibUV.uv_freeaddrinfo(res)
+      free(req)
 
-        // Free the addrinfo list returned by libuv
-        if res != null then LibUV.uv_freeaddrinfo(res)
-
-        // Unregister and clean up
-        val _ = CallbackRegistry.unregister(loopPtr, callbackId)
-        CallbackRegistry.freeRequest(ctx)
-        free(req)
-
-        callback(result)
+      callback(result)
     }
 
 end Dns
