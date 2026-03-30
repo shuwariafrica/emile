@@ -136,17 +136,17 @@ def baseCompilerOptions = List(
   "-Wunused:locals",
   "-Wunused:params",
   "-Wunused:privates",
+  "-Werror",
 
   // Scala 3-specific checks
   "-Yrequire-targetName",
   "-Ycheck-reentrant",
-  "-Ycheck-mods"
+  "-Ycheck-mods",
 )
 
 def compilerOptions = baseCompilerOptions ++ List(
   "-Yexplicit-nulls",
   "-Xcheck-macros",
-  "-Werror"
 )
 
 def compilerSettings = List(

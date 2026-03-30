@@ -30,6 +30,13 @@ class SignalStreamSuite extends EmileSuite:
 
   private inline def runEff[A](eff: Eff[IO, EmileError, A]): IO[A] = eff.rethrow
 
+  /** Send a signal to the current process, routing the POSIX result through the Eff channel. */
+  private def sendSignal(signum: Int): Eff[IO, EmileError, Unit] =
+    Eff.suspend[IO, EmileError, Int](kill(getpid(), signum)).flatMap { rc =>
+      if rc == 0 then Eff.unit[IO, EmileError]
+      else Eff.fail[IO, EmileError, Unit](EmileError.SystemError(emile.ErrorCode(rc), s"kill() returned $rc"))
+    }
+
   test("SignalStream.watch acquires signal handler") {
     runEff {
       SignalStream.watch(Signal.SIGUSR1).use { case (_, ready) =>
@@ -43,7 +50,7 @@ class SignalStreamSuite extends EmileSuite:
       SignalStream.watch(Signal.SIGUSR2).use { case (queue, ready) =>
         for
           _ <- Eff.liftF[IO, EmileError, Unit](ready)
-          _ <- Eff.liftF[IO, EmileError, Unit](IO(kill(getpid(), Signal.SIGUSR2)))
+          _ <- sendSignal(Signal.SIGUSR2)
           _ <- Eff.liftF[IO, EmileError, Unit](queue.take)
         yield ()
       }
@@ -55,7 +62,7 @@ class SignalStreamSuite extends EmileSuite:
       SignalStream.watch(Signal.SIGUSR2).use { case (queue, ready) =>
         for
           _ <- Eff.liftF[IO, EmileError, Unit](ready)
-          _ <- Eff.liftF[IO, EmileError, Unit](IO(kill(getpid(), Signal.SIGUSR2)))
+          _ <- sendSignal(Signal.SIGUSR2)
           _ <- Eff.liftF[IO, EmileError, Unit](queue.take)
         yield ()
       }
@@ -67,9 +74,9 @@ class SignalStreamSuite extends EmileSuite:
       SignalStream.watch(Signal.SIGUSR2).use { case (queue, ready) =>
         for
           _ <- Eff.liftF[IO, EmileError, Unit](ready)
-          _ <- Eff.liftF[IO, EmileError, Unit](IO(kill(getpid(), Signal.SIGUSR2)))
+          _ <- sendSignal(Signal.SIGUSR2)
           _ <- Eff.liftF[IO, EmileError, Unit](queue.take)
-          _ <- Eff.liftF[IO, EmileError, Unit](IO(kill(getpid(), Signal.SIGUSR2)))
+          _ <- sendSignal(Signal.SIGUSR2)
           _ <- Eff.liftF[IO, EmileError, Unit](queue.take)
         yield ()
       }
@@ -106,7 +113,7 @@ class SignalStreamSuite extends EmileSuite:
       SignalStream.watch(Signal.SIGUSR2).use { case (_, ready) =>
         for
           _ <- Eff.liftF[IO, EmileError, Unit](ready)
-          _ <- Eff.liftF[IO, EmileError, Unit](IO(kill(getpid(), Signal.SIGUSR2)))
+          _ <- sendSignal(Signal.SIGUSR2)
           _ <- Eff.liftF[IO, EmileError, Unit](IO.cede)
         yield ()
       } *>
