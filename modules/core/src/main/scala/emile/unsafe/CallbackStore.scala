@@ -49,9 +49,14 @@ import scala.scalanative.unsafe.*
 private[emile] object CallbackStore:
   private inline def uv = _root_.emile.unsafe.LibUV
 
-  /** Strong references preventing GC of callbacks stored in native data fields. */
-  private val gcRoots: java.util.Set[AnyRef] =
-    java.util.concurrent.ConcurrentHashMap.newKeySet[AnyRef]()
+  /** Strong references preventing GC of callbacks stored in native data fields.
+    *
+    * Uses java.util.IdentityHashMap for O(1) identity-based lookup (no hashCode/equals calls on
+    * stored objects). Wrapped in Collections.synchronizedMap for thread safety. Using identity
+    * semantics avoids calling any methods on the stored callbacks.
+    */
+  private val gcRoots: java.util.Map[AnyRef, java.lang.Boolean] =
+    java.util.Collections.synchronizedMap(new java.util.IdentityHashMap[AnyRef, java.lang.Boolean]())
 
   // =========================================================================
   // Handle callbacks
@@ -67,7 +72,7 @@ private[emile] object CallbackStore:
     */
   def attach(handle: Ptr[Byte], callback: AnyRef): Unit =
     detach(handle) // unpin previous, if any
-    gcRoots.add(callback)
+    gcRoots.put(callback, java.lang.Boolean.TRUE)
     uv.uv_handle_set_data(handle, toPtr(callback))
 
   /** Retrieve the callback from a handle's native data field.
@@ -83,7 +88,7 @@ private[emile] object CallbackStore:
   def detach(handle: Ptr[Byte]): Unit =
     val data = uv.uv_handle_get_data(handle)
     if data != null then
-      gcRoots.remove(fromPtr[AnyRef](data))
+      val _ = gcRoots.remove(fromPtr[AnyRef](data))
       uv.uv_handle_set_data(handle, null.asInstanceOf[Ptr[Byte]])
 
   // =========================================================================
@@ -92,7 +97,7 @@ private[emile] object CallbackStore:
 
   /** Attach a callback to a request's native data field. */
   def attachReq(req: Ptr[Byte], callback: AnyRef): Unit =
-    gcRoots.add(callback)
+    gcRoots.put(callback, java.lang.Boolean.TRUE)
     uv.uv_req_set_data(req, toPtr(callback))
 
   /** Retrieve and detach the callback from a request.
@@ -104,7 +109,7 @@ private[emile] object CallbackStore:
     if data == null then None
     else
       val cb = fromPtr[A](data)
-      gcRoots.remove(cb.asInstanceOf[AnyRef])
+      val _ = gcRoots.remove(cb.asInstanceOf[AnyRef])
       uv.uv_req_set_data(req, null.asInstanceOf[Ptr[Byte]])
       Some(cb)
 

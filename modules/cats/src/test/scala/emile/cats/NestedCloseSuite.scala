@@ -15,8 +15,7 @@
  */
 package emile.cats
 
-import scala.concurrent.duration.*
-
+import cats.effect.Deferred
 import cats.effect.IO
 
 import boilerplate.effect.Eff
@@ -31,11 +30,16 @@ class NestedCloseSuite extends EmileSuite:
   test("TimerResource releases cleanly under cancellation") {
     runEff {
       for
+        acquired <- Eff.liftF[IO, EmileError, Deferred[IO, Unit]](Deferred[IO, Unit])
         fiber <- TimerResource.make.use { _ =>
-                   Eff.liftF[IO, EmileError, Unit](IO.never)
+                   // Signal that the resource is acquired, then block
+                   Eff.liftF[IO, EmileError, Boolean](acquired.complete(())) *>
+                     Eff.liftF[IO, EmileError, Unit](IO.never)
                  }.start
-        _ <- Eff.liftF[IO, EmileError, Unit](IO.sleep(20.millis))
+        // Wait for the resource to be acquired (no sleep hack)
+        _ <- Eff.liftF[IO, EmileError, Unit](acquired.get)
         _ <- fiber.cancel
+        // If the resource leaked, this would fail or hang
         _ <- TimerResource.make.use(_ => Eff.unit[IO, EmileError])
       yield ()
     }

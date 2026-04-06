@@ -35,3 +35,6 @@ int emile_uv_enomem(void)            { return UV_ENOMEM; }
 int emile_uv_ebusy(void)             { return UV_EBUSY; }
 int emile_uv_enosys(void)            { return UV_ENOSYS; }
 int emile_uv_enotsup(void)           { return UV_ENOTSUP; }
+
+/* Read the signum field from a uv_signal_t handle. */
+int emile_uv_signal_signum(uv_signal_t* handle) { return handle->signum; }

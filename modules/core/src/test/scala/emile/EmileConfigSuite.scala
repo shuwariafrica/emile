@@ -305,8 +305,8 @@ class EmileConfigSuite extends FunSuite:
       _ <- tcp.setNoDelay(false)
       _ <- tcp.setKeepAlive(true, 60)
       _ <- tcp.disableKeepAlive
+      // Only test disabling — on Windows, re-enabling after disable returns ENOTSUP
       _ <- tcp.setSimultaneousAccepts(false)
-      _ <- tcp.setSimultaneousAccepts(true)
       _ = tcp.close
       _ <- loop.run(RunMode.Default)
       _ <- loop.close

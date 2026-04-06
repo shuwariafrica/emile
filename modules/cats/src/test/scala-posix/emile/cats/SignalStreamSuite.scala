@@ -25,12 +25,19 @@ import boilerplate.effect.Eff
 import emile.EmileError
 import emile.Signal
 
-/** Tests for SignalStream - Unix signal handling. */
+/** Tests for SignalStream - Unix signal handling.
+  *
+  * SIGUSR1/SIGUSR2 are set to SIG_IGN before the suite runs. This prevents the default SIG_DFL
+  * (terminate) from killing the process during the window between test resource release
+  * (uv_signal_stop → sigaction(SIG_DFL)) and the next test's resource acquisition (uv_signal_start
+  * → sigaction(handler)). libuv's uv_signal_start replaces SIG_IGN with its own handler;
+  * uv_signal_stop restores SIG_DFL. By setting SIG_IGN as the baseline, the worst case between
+  * tests is SIG_IGN (signal ignored) rather than SIG_DFL (process killed).
+  */
 class SignalStreamSuite extends EmileSuite:
 
   private inline def runEff[A](eff: Eff[IO, EmileError, A]): IO[A] = eff.rethrow
 
-  /** Send a signal to the current process, routing the POSIX result through the Eff channel. */
   private def sendSignal(signum: Int): Eff[IO, EmileError, Unit] =
     Eff.suspend[IO, EmileError, Int](kill(getpid(), signum)).flatMap { rc =>
       if rc == 0 then Eff.unit[IO, EmileError]

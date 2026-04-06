@@ -24,96 +24,55 @@ import emile.EmileError
 /** Tests for AsyncResource - async handle lifecycle management. */
 class AsyncResourceSuite extends EmileSuite:
 
-  // Helper to run Eff tests - unwraps to IO for the test framework
   private inline def runEff[A](eff: Eff[IO, EmileError, A]): IO[A] = eff.rethrow
 
   test("AsyncResource.make acquires and releases async handle") {
     runEff {
-      EmileLoop.integrated.use { implicit loop =>
-        AsyncResource.make(() => ()).use { async =>
-          Eff.succeed[IO, EmileError, Unit] {
-            assert(!async.isClosing, "Async should not be closing")
-          }
-        }
+      AsyncResource.make(() => ()).use { async =>
+        Eff.succeed[IO, EmileError, Unit](assert(!async.isClosing))
       }
     }
   }
 
   test("AsyncResource.make creates handle with correct type") {
     runEff {
-      EmileLoop.integrated.use { implicit loop =>
-        AsyncResource.make(() => ()).use { async =>
-          Eff.succeed[IO, EmileError, Unit] {
-            assertEquals(async.handleType, emile.HandleType.Async)
-          }
-        }
+      AsyncResource.make(() => ()).use { async =>
+        Eff.succeed[IO, EmileError, Unit](assertEquals(async.handleType, emile.HandleType.Async))
       }
     }
   }
 
   test("AsyncResource callback is invoked on send") {
     runEff {
-      EmileLoop.integrated.use { implicit loop =>
-        import cats.effect.Ref
-        for
-          counter <- Eff.liftF[IO, EmileError, Ref[IO, Int]](Ref.of[IO, Int](0))
-          _ <- AsyncResource
-                 .make { () =>
-                   counter.update(_ + 1).unsafeRunAndForget()
-                 }
-                 .use { async =>
-                   Eff.liftF[IO, EmileError, Unit](IO {
-                     val _ = async.send
-                   }) *>
-                     // Give the callback a chance to run
-                     Eff.liftF[IO, EmileError, Unit](IO.sleep(scala.concurrent.duration.DurationInt(50).millis)) *>
-                     Eff.liftF[IO, EmileError, Int](counter.get).flatMap { count =>
-                       Eff.succeed[IO, EmileError, Unit](assert(count >= 1, s"Callback should have been invoked, got $count"))
-                     }
-                 }
-        yield ()
-        end for
+      // Use withQueue for proper synchronisation — no sleep hacks
+      AsyncResource.withQueue.use { case (async, queue) =>
+        Eff.liftF[IO, EmileError, Unit](IO(async.send).void) *>
+          // queue.take blocks until the callback fires — semantically correct
+          Eff.liftF[IO, EmileError, Unit](queue.take)
       }
     }
   }
 
   test("AsyncResource can send multiple times") {
     runEff {
-      EmileLoop.integrated.use { implicit loop =>
-        import cats.effect.Ref
-        for
-          counter <- Eff.liftF[IO, EmileError, Ref[IO, Int]](Ref.of[IO, Int](0))
-          _ <- AsyncResource
-                 .make { () =>
-                   counter.update(_ + 1).unsafeRunAndForget()
-                 }
-                 .use { async =>
-                   Eff.liftF[IO, EmileError, Unit](IO {
-                     (1 to 5).foreach { _ =>
-                       val _ = async.send
-                     }
-                   }) *>
-                     Eff.liftF[IO, EmileError, Unit](IO.sleep(scala.concurrent.duration.DurationInt(100).millis)) *>
-                     Eff.liftF[IO, EmileError, Int](counter.get).flatMap { count =>
-                       // Multiple sends may coalesce, but at least one should fire
-                       Eff.succeed[IO, EmileError, Unit](assert(count >= 1, s"At least one callback should have fired, got $count"))
-                     }
-                 }
-        yield ()
-        end for
+      AsyncResource.withQueue.use { case (async, queue) =>
+        // Send multiple times
+        Eff.liftF[IO, EmileError, Unit](IO {
+          (1 to 3).foreach(_ => async.send)
+        }.void) *>
+          // Take at least one (sends may coalesce)
+          Eff.liftF[IO, EmileError, Unit](queue.take)
       }
     }
   }
 
   test("Multiple AsyncResource instances can coexist") {
     runEff {
-      EmileLoop.integrated.use { implicit loop =>
-        AsyncResource.make(() => ()).use { async1 =>
-          AsyncResource.make(() => ()).use { async2 =>
-            Eff.succeed[IO, EmileError, Unit] {
-              assert(!async1.isClosing && !async2.isClosing)
-              assertNotEquals(async1.ptrUnsafe, async2.ptrUnsafe)
-            }
+      AsyncResource.make(() => ()).use { async1 =>
+        AsyncResource.make(() => ()).use { async2 =>
+          Eff.succeed[IO, EmileError, Unit] {
+            assert(!async1.isClosing && !async2.isClosing)
+            assertNotEquals(async1.ptrUnsafe, async2.ptrUnsafe)
           }
         }
       }

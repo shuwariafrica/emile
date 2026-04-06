@@ -112,6 +112,37 @@ object Loop:
                 Right(loop)
         }
 
+  /** Create a loop, run a body, drain all handles, and close.
+    *
+    * This is the recommended way to use a loop in the core module. The body registers handles and
+    * callbacks. After the body returns, the loop runs until all handles drain (UV_RUN_DEFAULT),
+    * then any remaining handles are force-closed via walkAndClose + closeDrain.
+    *
+    * {{{
+    * Loop.use { loop =>
+    *   for
+    *     timer <- Timer.after(loop, Timeout.millis(100))(() => println("fired"))
+    *   yield ()
+    * }
+    * }}}
+    */
+  def use[A](f: Loop => Either[EmileError, A]): Either[EmileError, A] =
+    create.flatMap { loop =>
+      val result = f(loop)
+      val _ = LibUV.uv_run(loop, RunMode.Default.toLibuv)
+      val _ = loop.closeDrain
+      result
+    }
+
+  /** Create a loop with config, run a body, drain, and close. */
+  def use[A](config: LoopConfig)(f: Loop => Either[EmileError, A]): Either[EmileError, A] =
+    create(config).flatMap { loop =>
+      val result = f(loop)
+      val _ = LibUV.uv_run(loop, RunMode.Default.toLibuv)
+      val _ = loop.closeDrain
+      result
+    }
+
   /** Apply configuration overrides to an existing loop.
     *
     * Only values explicitly set in the config are applied.

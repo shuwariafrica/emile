@@ -410,6 +410,10 @@ private[emile] object LibUV:
   /** Stop watching for signals. */
   def uv_signal_stop(handle: Ptr[Byte]): CInt = extern
 
+  /** Read the signum field from a signal handle (C helper). */
+  @name("emile_uv_signal_signum")
+  def uv_signal_signum(handle: Ptr[Byte]): CInt = extern
+
   // ==========================================================================
   // DNS functions (getaddrinfo)
   // ==========================================================================

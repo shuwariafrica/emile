@@ -200,17 +200,14 @@ object ManagedLoop:
                     startupLatch.countDown()
 
                     // Main loop - poll queue and run I/O
-                    while running.get() do
-                      // Process pending I/O events without blocking
-                      val _ = loop.run(RunMode.NoWait)
-
-                      // Drain task queue
-                      drainQueue(loop, taskQueue, running, asyncHandle)
-
-                      // Short wait for new tasks (allows responsive shutdown)
-                      if running.get() then
-                        val task = taskQueue.poll(10, TimeUnit.MILLISECONDS)
-                        if task != null then processTask(loop, task, running, asyncHandle)
+                    try
+                      while running.get() do
+                        val _ = loop.run(RunMode.NoWait)
+                        drainQueue(loop, taskQueue, running, asyncHandle)
+                        if running.get() then
+                          val task = taskQueue.poll(10, TimeUnit.MILLISECONDS)
+                          if task != null then processTask(loop, task, running, asyncHandle)
+                    catch case _: InterruptedException => () // scalafix:ok; shutdown requested
 
                     // Cleanup: close all handles and drain the loop
                     asyncHandle.closeAsync(_ => ())

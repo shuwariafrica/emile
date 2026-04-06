@@ -197,12 +197,22 @@ object SignalHandle:
     def closeAsync(callback: Either[EmileError, Unit] => Unit): Unit =
       if LibUV.uv_is_closing(signal) != 0 then callback(Left(EmileError.AlreadyClosed))
       else
+        // Capture signum before close (uv__signal_stop resets it to 0)
+        val signum = LibUV.uv_signal_signum(signal)
         // Drain any pending signals from libuv's self-pipe so they dispatch
         // to active handlers before we deregister the sigaction handler
         val loop = LibUV.uv_handle_get_loop(signal)
         val _ = LibUV.uv_run(loop, RunMode.NoWait.toLibuv)
+        // Wrap the user callback: after close completes, set SIG_IGN for
+        // this signal to prevent SIG_DFL (terminate) if a stale signal
+        // arrives between handler deregistration and re-registration
+        val wrappedCallback: Either[EmileError, Unit] => Unit = result =>
+          if signum > 0 then
+            import scala.scalanative.libc.signal as clib
+            val _ = clib.signal(signum, clib.SIG_IGN)
+          callback(result)
         CallbackStore.detach(signal)
-        CallbackStore.attach(signal, callback)
+        CallbackStore.attach(signal, wrappedCallback)
         LibUV.uv_close(signal, Handle.closeCallback)
   end extension
 

@@ -64,7 +64,7 @@ class TcpSuite extends FunSuite:
       _ = assert(!tcp.isClosing, "Should not be closing initially")
       _ = tcp.close
       _ <- loop.run(RunMode.Default)
-      _ <- loop.close
+      _ <- loop.closeDrain
     yield tcp
 
     assert(result.isRight, s"Expected Right but got $result")
@@ -77,7 +77,7 @@ class TcpSuite extends FunSuite:
       _ <- tcp.bind(addr("0.0.0.0", 0))
       _ = tcp.close
       _ <- loop.run(RunMode.Default)
-      _ <- loop.close
+      _ <- loop.closeDrain
     yield ()
 
     assert(result.isRight, s"Bind failed: $result")
@@ -93,7 +93,7 @@ class TcpSuite extends FunSuite:
       _ = assertEquals(getHost(sockName), "127.0.0.1")
       _ = tcp.close
       _ <- loop.run(RunMode.Default)
-      _ <- loop.close
+      _ <- loop.closeDrain
     yield ()
 
     assert(result.isRight, s"getSocketName failed: $result")
@@ -134,7 +134,7 @@ class TcpSuite extends FunSuite:
                }
       _ = timerRef = timer
       _ <- loop.run(RunMode.Default)
-      _ <- loop.close
+      _ <- loop.closeDrain
     yield ()
 
     assert(result.isRight, s"Test failed: $result")
@@ -148,7 +148,7 @@ class TcpSuite extends FunSuite:
       _ <- tcp.setNoDelay(false)
       _ = tcp.close
       _ <- loop.run(RunMode.Default)
-      _ <- loop.close
+      _ <- loop.closeDrain
     yield ()
 
     assert(result.isRight, s"setNoDelay failed: $result")
@@ -161,7 +161,7 @@ class TcpSuite extends FunSuite:
       _ <- tcp.setKeepAlive(false, 0)
       _ = tcp.close
       _ <- loop.run(RunMode.Default)
-      _ <- loop.close
+      _ <- loop.closeDrain
     yield ()
 
     assert(result.isRight, s"setKeepAlive failed: $result")
@@ -177,7 +177,7 @@ class TcpSuite extends FunSuite:
       _ = assert(tcp.hasRef, "Should have ref after ref")
       _ = tcp.close
       _ <- loop.run(RunMode.Default)
-      _ <- loop.close
+      _ <- loop.closeDrain
     yield ()
 
     assert(result.isRight, s"Handle operations failed: $result")
@@ -198,13 +198,13 @@ class TcpSuite extends FunSuite:
       _ = assert(listenResult.isLeft, s"Listening on already used port should fail, but got: $listenResult")
       _ = listenResult match
             case Left(EmileError.SystemError(code, _)) =>
-              assert(code.value == -98 || code.value == -48, s"Expected EADDRINUSE, got code: ${code.value}")
+              assert(code == ErrorCode.AddressInUse, s"Expected EADDRINUSE, got code: ${code.value}")
             case other =>
               fail(s"Expected SystemError, got: $other")
       _ = tcp1.close
       _ = tcp2.close
       _ <- loop.run(RunMode.Default)
-      _ <- loop.close
+      _ <- loop.closeDrain
     yield ()
 
     assert(result.isRight, s"Test failed: $result")
@@ -229,7 +229,7 @@ class TcpSuite extends FunSuite:
                }
       _ = timerRef = timer
       _ <- loop.run(RunMode.Default)
-      _ <- loop.close
+      _ <- loop.closeDrain
     yield ()
 
     assert(result.isRight, s"Test failed: $result")
@@ -284,7 +284,7 @@ class TcpSuite extends FunSuite:
                }
       _ = timerRef = timer
       _ <- loop.run(RunMode.Default)
-      _ <- loop.close
+      _ <- loop.closeDrain
     yield ()
 
     assert(result.isRight, s"Test failed: $result")
@@ -349,7 +349,7 @@ class TcpSuite extends FunSuite:
                }
       _ = timerRef = timer
       _ <- loop.run(RunMode.Default)
-      _ <- loop.close
+      _ <- loop.closeDrain
     yield ()
 
     assert(result.isRight, s"Test failed: $result")
@@ -402,7 +402,7 @@ class TcpSuite extends FunSuite:
                }
       _ = timerRef = timer
       _ <- loop.run(RunMode.Default)
-      _ <- loop.close
+      _ <- loop.closeDrain
     yield ()
 
     assert(result.isRight, s"Test failed: $result")
@@ -416,7 +416,7 @@ class TcpSuite extends FunSuite:
       _ = assert(!tcp.isWritable, "Should not be writable before connection")
       _ = tcp.close
       _ <- loop.run(RunMode.Default)
-      _ <- loop.close
+      _ <- loop.closeDrain
     yield ()
 
     assert(result.isRight, s"Test failed: $result")
@@ -465,7 +465,7 @@ class TcpSuite extends FunSuite:
                }
       _ = timerRef = timer
       _ <- loop.run(RunMode.Default)
-      _ <- loop.close
+      _ <- loop.closeDrain
     yield ()
 
     assert(result.isRight, s"Test failed: $result")
@@ -484,6 +484,7 @@ class TcpSuite extends FunSuite:
       _ <- tcp.listen(128) { _ => lastCallback = 1 }
       _ <- tcp.listen(128) { _ => lastCallback = 2 }
       _ = tcp.close
+      _ <- loop.run(RunMode.Default)
       _ <- loop.closeDrain
     yield ()
 
@@ -519,7 +520,7 @@ class TcpSuite extends FunSuite:
                }
       _ = timerRef = timer
       _ <- loop.run(RunMode.Default)
-      _ <- loop.close
+      _ <- loop.closeDrain
     yield ()
 
     assert(result.isRight, s"Test failed: $result")
