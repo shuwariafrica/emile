@@ -1,4 +1,4 @@
-scalaVersion := "3.8.3"
+scalaVersion := "3.8.4"
 organization := "io.github.arashi01"
 description := "Scala Native async I/O library backed by libuv."
 startYear := Some(2025)
