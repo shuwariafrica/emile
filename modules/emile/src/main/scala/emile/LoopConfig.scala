@@ -21,6 +21,8 @@ package emile
   * @param blockProfilerSignal block `SIGPROF` while the loop polls (libuv `UV_LOOP_BLOCK_SIGNAL`),
   *   suppressing sampling-profiler wake-ups; libuv blocks `SIGPROF` only, so this is the whole of
   *   the choice
+  * @param useIoUringSqpoll register the loop's io_uring with kernel-side submission-queue polling
+  *   (libuv `UV_LOOP_USE_IO_URING_SQPOLL`)
   */
 final case class LoopConfig(
   blockProfilerSignal: Boolean,

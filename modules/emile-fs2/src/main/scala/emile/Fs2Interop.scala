@@ -51,30 +51,24 @@ object Fs2Interop:
     def acceptFs2: Stream[IO, Fs2Socket[IO]] =
       server.connections.translate(absolveIoK).map(_.asFs2)
 
-  /** Natural transformation from the typed-error effect to plain `IO`, used by [[acceptFs2]] and
-    * the adapter's `reads` to translate streams.
-    */
+  // Typed-error -> IO natural transformation; needed because Stream.translate takes a ~>, not absolve.
   private val absolveIoK: FunctionK[EffIO.Of[EmileError.Io], IO] =
     new FunctionK[EffIO.Of[EmileError.Io], IO]:
       def apply[A](fa: EffIO[EmileError.Io, A]): IO[A] = fa.absolve
 
-  /** Socket options the adapter forwards to a real `TcpSocket` setter. `getOption` returns `None`
-    * for these keys too - emile does not currently expose corresponding getters.
-    */
+  // Options the adapter forwards to a TcpSocket setter; getOption still returns None for them, as
+  // emile exposes no corresponding getters.
   private val SupportedOptionKeys: Set[SocketOption.Key[?]] = Set(
     StandardSocketOptions.TCP_NODELAY,
     StandardSocketOptions.SO_KEEPALIVE
   )
 
-  /** Default keep-alive configuration applied when the fs2 caller turns `SO_KEEPALIVE` on - fs2's
-    * `SO_KEEPALIVE` is a single boolean; emile's keep-alive carries idle / interval / count, so the
-    * adapter picks the [[TcpKeepAlive.simple]] 60-second profile.
-    */
+  // fs2's SO_KEEPALIVE is a single boolean, but emile's keep-alive carries idle/interval/count, so
+  // turning it on applies this 60-second profile.
   private val DefaultKeepAlive: TcpKeepAlive = TcpKeepAlive.simple(60.seconds)
 
-  /** The `Fs2Socket[IO]` implementation backing [[asFs2]] - forwards every method to the underlying
-    * emile [[TcpSocket]], absolving the typed-error channel onto `IO`'s `Throwable` channel.
-    */
+  // Backs asFs2: forwards every method to the emile TcpSocket, absolving the typed-error channel onto
+  // IO's Throwable channel.
   final private class Fs2SocketAdapter(socket: TcpSocket) extends Fs2Socket[IO]:
 
     def address: GenSocketAddress = socket.address
@@ -101,7 +95,7 @@ object Fs2Interop:
         socket.setKeepAlive(cfg).absolve
       else IO.raiseError(new IllegalArgumentException(s"emile-fs2: socket option not supported: $key"))
 
-    // ============================ Deprecated members (still abstract on Socket / SocketInfo) ============================
+    // Deprecated on fs2's Socket / SocketInfo but still abstract, so they must be implemented.
 
     def isOpen: IO[Boolean] = IO.pure(true)
     def localAddress: IO[SocketAddress[IpAddress]] = IO(address.asIpUnsafe)

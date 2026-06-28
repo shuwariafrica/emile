@@ -66,7 +66,7 @@ object Dns:
       .liftF(LibuvPollingSystem.currentPoller)
       .flatMap(poller => EffIO.attempt(getNameInfo(poller, addr), EmileError.Dns.Unexpected(_)))
 
-  /** The `getaddrinfo` node string: the ASCII host for an [[IDN]], the plain text otherwise. */
+  // IDN must resolve via its ASCII (Punycode) hostname; plain hosts use their text form.
   private def hostString(host: Host): String = host match
     case ip: IpAddress => ip.toString
     case hn: Hostname => hn.toString
@@ -108,9 +108,6 @@ object Dns:
         else CallbackBridge.storeReq(poller, req, nameDeliver(poller, cb, addr.toString))
         None
 
-  /** Delivery closure for a `getaddrinfo` request: walk the result list, release the anchor, free
-    * the addrinfo, complete.
-    */
   private def addrDeliver(
     poller: LibuvPoller,
     cb: Either[Throwable, NonEmptyList[SocketAddress[IpAddress]]] => Unit,
@@ -124,7 +121,6 @@ object Dns:
       CallbackBridge.releaseReq(poller, req)
       cb(outcome)
 
-  /** Delivery closure for a `getnameinfo` request. */
   private def nameDeliver(
     poller: LibuvPoller,
     cb: Either[Throwable, Hostname] => Unit,
@@ -137,17 +133,14 @@ object Dns:
       CallbackBridge.releaseReq(poller, req)
       cb(outcome)
 
-  /** `uv_getaddrinfo_cb` - runs the request's delivery closure (which releases the anchor), then
-    * frees the request.
-    */
+  // uv_getaddrinfo_cb: run the stored delivery closure, then free the request.
   private val gaiCb: LibUV.GetAddrInfoCB = (req: Ptr[Byte], status: CInt, res: Ptr[Byte]) =>
     val deliver = CallbackBridge.loadReq[(Ptr[Byte], Int, Ptr[Byte]) => Unit](req)
     deliver(req, status, res)
     stdlib.free(req)
 
-  /** `uv_getnameinfo_cb` - runs the request's delivery closure, then frees the request. The host
-    * name points into the request, so the closure must run before the free.
-    */
+  // uv_getnameinfo_cb: the host name points into the request, so run the delivery closure before
+  // freeing the request.
   private val niCb: LibUV.GetNameInfoCB = (req: Ptr[Byte], status: CInt, hostname: CString, _: CString) =>
     val deliver = CallbackBridge.loadReq[(Ptr[Byte], Int, CString) => Unit](req)
     deliver(req, status, hostname)

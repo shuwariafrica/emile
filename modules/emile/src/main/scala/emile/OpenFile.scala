@@ -31,9 +31,6 @@ import emile.unsafe.LibUV
 import emile.unsafe.LibuvPoller
 import emile.unsafe.Routing
 
-/** The open `uv_file` descriptor and the loop its `uv_fs_*` requests run on - the representation
-  * behind [[OpenFile]].
-  */
 final private class OpenFileState(val file: Int, val poller: LibuvPoller)
 
 /** A file open for reading, backed by a libuv `uv_file`. Acquired through [[OpenFile$ OpenFile]];
@@ -53,7 +50,7 @@ object OpenFile:
   given CanEqual[OpenFile, OpenFile] = CanEqual.derived
 
   extension (file: OpenFile)
-    /** The file's size in bytes, via `uv_fs_fstat`. */
+    /** The file's size in bytes. */
     def size: EmIO[EmileError.Io, Long] =
       EffIO.attempt(statSize(file), EmileError.Io.Unexpected(_))
 
@@ -74,7 +71,7 @@ object OpenFile:
   private def release(file: OpenFile): EmIO[EmileError.Io, Unit] =
     EffIO.liftF(closeFile(file))
 
-  /** `uv_fs_open` for reading - the callback delivers `req->result`, the `uv_file`. */
+  // uv_fs_open for reading; the request result delivered by the callback is the uv_file descriptor.
   private def openFile(poller: LibuvPoller, path: Path): IO[Int] =
     IO.async[Int]: cb =>
       Routing.onOwner(poller):
@@ -84,7 +81,6 @@ object OpenFile:
         else CallbackBridge.storeReq(poller, req, openDeliver(poller, cb))
         None
 
-  /** `uv_fs_fstat` for the file size. */
   private def statSize(file: OpenFile): IO[Long] =
     IO.async[Long]: cb =>
       Routing.onOwner(file.poller):
@@ -94,7 +90,7 @@ object OpenFile:
         else CallbackBridge.storeReq(file.poller, req, statDeliver(file.poller, cb))
         None
 
-  /** `uv_fs_close` - the descriptor is released whatever the close result. */
+  // uv_fs_close; the descriptor is treated as released whatever the close result.
   private def closeFile(file: OpenFile): IO[Unit] =
     IO.async[Unit]: cb =>
       Routing.onOwner(file.poller):
@@ -109,10 +105,8 @@ object OpenFile:
   private def startOpen(poller: LibuvPoller, req: Ptr[Byte], path: Path): Int =
     Zone(LibUV.uv_fs_open(poller.loop, req, toCString(path.toString), LibUV.UV_FS_O_RDONLY, 0, fsCb))
 
-  /** Deliver a synchronous `uv_fs_*` failure: clean up the request, then fail the callback. The
-    * request never had its anchor stored (synchronous failure is before `storeReq`), so no
-    * `releaseReq` is needed - the request is just freed.
-    */
+  // Synchronous uv_fs_* failure: it occurs before storeReq, so there is no anchor to release - just
+  // clean up the request and fail the callback.
   private def failRequest[A](req: Ptr[Byte], cb: Either[Throwable, A] => Unit, rc: Int): Unit =
     cleanupRequest(req)
     cb(Left(IoMapping.fromCode(rc)))
@@ -153,7 +147,7 @@ object OpenFile:
     else req
   // scalafix:on DisableSyntax
 
-  /** `uv_fs_cb` - runs the per-request delivery closure stored in the request's `data` slot. */
+  // uv_fs_cb: run the per-request delivery closure stored in the request's data slot.
   private val fsCb: LibUV.FsCB = (req: Ptr[Byte]) => CallbackBridge.loadReq[Ptr[Byte] => Unit](req).apply(req)
 
 end OpenFile
