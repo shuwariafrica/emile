@@ -17,6 +17,8 @@ package emile
 
 import scala.util.control.NoStackTrace
 
+import cats.data.NonEmptyList
+
 /** Sealed root of every typed error emile surfaces. The whole hierarchy - a sub-trait per failure
   * domain, each with its named cases - lives in [[EmileError$ EmileError]].
   *
@@ -70,6 +72,13 @@ object EmileError:
     case object NetworkUnreachable extends EmileError("Network unreachable", None) with Connect
     case object HostUnreachable extends EmileError("Host unreachable", None) with Connect
     case object TimedOut extends EmileError("Connection timed out", None) with Connect
+
+    /** Every address a hostname resolved to failed to connect; `failures` carries the per-address
+      * [[Connect]] errors in resolver order.
+      */
+    final case class AllAddressesFailed(failures: NonEmptyList[Connect]) extends EmileError("", None) with Connect:
+      override def getMessage: String =
+        s"All ${failures.size} resolved addresses failed to connect (last: ${failures.last.getMessage})"
 
     final case class System(code: ErrorCode) extends EmileError("", None) with Connect:
       override def getMessage: String = ErrorCode.describe(code)

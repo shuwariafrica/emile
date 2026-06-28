@@ -553,8 +553,12 @@ object TcpSocket:
             if rc2 < 0 then
               cleanupFsReq(req)
               cb(Left(IoMapping.fromCode(rc2)))
-            else CallbackBridge.storeReq(socket.poller, req, sendFileDeliver(socket.poller, cb))
-            None
+              None
+            else
+              CallbackBridge.storeReq(socket.poller, req, sendFileDeliver(socket.poller, cb))
+              // Cancellation cancels the queued sendfile; its callback fires UV_ECANCELED, which
+              // sendFileDeliver maps to an error and frees the request.
+              Some(Routing.onOwner(socket.poller)(LibUV.uv_cancel(req): Unit))
           end if
       },
       EmileError.Io.Unexpected(_)

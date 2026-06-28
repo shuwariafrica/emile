@@ -20,6 +20,7 @@ import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
 import boilerplate.effect.EffIO
+import cats.data.NonEmptyList
 import cats.effect.IO
 import cats.effect.Resource
 import cats.effect.std.unsafe.UnboundedQueue
@@ -53,10 +54,12 @@ object Tcp:
   def connect(address: SocketAddress[IpAddress]): EmResource[EmileError.Connect, TcpSocket] =
     connect(address, TcpOptions.default)
 
-  /** Connect to `address` with `options`. */
+  /** Connect to `address` with `options`. The connect is cancelable: a `timeout` or cancellation
+    * aborts the in-flight `uv_tcp_connect` and frees the handle.
+    */
   def connect(address: SocketAddress[IpAddress], options: TcpOptions): EmResource[EmileError.Connect, TcpSocket] =
     Resource
-      .make[EffIO.Of[EmileError.Connect], TcpSocket](connectRaw(address))(socket => EffIO.liftF(TcpSocket.release(socket)))
+      .makeFull[EffIO.Of[EmileError.Connect], TcpSocket](poll => poll(connectRaw(address)))(socket => EffIO.liftF(TcpSocket.release(socket)))
       .evalTap(applyPostConnect(_, options))
 
   /** Connect by hostname with the default [[TcpOptions]]. */
@@ -70,7 +73,9 @@ object Tcp:
     */
   def connect(host: Host, port: Port, options: TcpOptions): EmResource[EmileError.HostConnect, TcpSocket] =
     Resource
-      .make[EffIO.Of[EmileError.HostConnect], TcpSocket](hostConnectAcquire(host, port))(socket => EffIO.liftF(TcpSocket.release(socket)))
+      .makeFull[EffIO.Of[EmileError.HostConnect], TcpSocket](poll => poll(hostConnectAcquire(host, port)))(socket =>
+        EffIO.liftF(TcpSocket.release(socket))
+      )
       .evalTap(applyPostConnect(_, options))
 
   private def bindAcquire(address: SocketAddress[IpAddress], options: TcpOptions): EmIO[EmileError.Bind, TcpServer] =
@@ -177,8 +182,8 @@ object Tcp:
         if initRc != 0 then
           stdlib.free(handle)
           cb(Left(ConnectMapping.fromCode(initRc)))
+          None
         else startConnect(poller, handle, address, cb)
-        None
     }
 
   private def startConnect(
@@ -186,7 +191,7 @@ object Tcp:
     handle: Ptr[Byte],
     address: SocketAddress[IpAddress],
     cb: Either[Throwable, TcpSocket] => Unit
-  ): Unit =
+  ): Option[IO[Unit]] =
     val req = allocConnectReq()
     val sockaddr = stdlib.calloc(1.toCSize, SockAddr.storageSize.toCSize)
     if sockaddr == null then
@@ -202,7 +207,16 @@ object Tcp:
       stdlib.free(req)
       LibUV.uv_close(handle, freeHandleCb)
       cb(Left(ConnectMapping.fromCode(connectRc)))
+      None
+    else
+      // Cancellation finaliser: uv_close the in-flight handle, which makes connectCb fire with
+      // UV_ECANCELED (its connectDeliver, seeing uv_is_closing, frees only the req) and the close
+      // callback frees the handle.
+      Some(Routing.onOwner(poller)(abortConnect(handle)))
   end startConnect
+
+  private def abortConnect(handle: Ptr[Byte]): Unit =
+    if LibUV.uv_is_closing(handle) == 0 then LibUV.uv_close(handle, freeHandleCb)
 
   private def connectDeliver(
     cb: Either[Throwable, TcpSocket] => Unit,
@@ -212,7 +226,8 @@ object Tcp:
     (status, req) =>
       CallbackBridge.releaseReq(poller, req)
       stdlib.free(req)
-      if status < 0 then
+      if LibUV.uv_is_closing(handle) != 0 then () // cancelled: the finaliser uv_close'd the handle; cb is dead
+      else if status < 0 then
         LibUV.uv_close(handle, freeHandleCb)
         cb(Left(ConnectMapping.fromCode(status)))
       else
@@ -247,18 +262,22 @@ object Tcp:
   private def ioToConnect(error: EmileError.Io): EmileError.Connect = EmileError.Connect.Unexpected(error)
 
   private def hostConnectAcquire(host: Host, port: Port): EmIO[EmileError.HostConnect, TcpSocket] =
-    Dns.resolve(host, port).flatMap(addresses => tryAddresses(addresses.toList, lastError = None))
+    Dns.resolve(host, port).flatMap(addresses => tryAddresses(addresses.toList, Nil))
 
   private def tryAddresses(
     addresses: List[SocketAddress[IpAddress]],
-    lastError: Option[EmileError.Connect]
+    failures: List[EmileError.Connect]
   ): EmIO[EmileError.HostConnect, TcpSocket] =
     addresses match
       case Nil =>
-        EffIO.fail(
-          lastError.getOrElse(EmileError.Connect.Unexpected(new IllegalStateException("emile: empty DNS result")))
-        )
-      case head :: rest => connectRaw(head).catchAll(err => tryAddresses(rest, Some(err)))
+        // failures accumulate newest-first; restore resolver order. A single failure surfaces
+        // directly; multiple are aggregated so no per-address diagnostic is discarded.
+        val error: EmileError.Connect = NonEmptyList.fromList(failures.reverse) match
+          case Some(NonEmptyList(only, Nil)) => only
+          case Some(nel) => EmileError.Connect.AllAddressesFailed(nel)
+          case None => EmileError.Connect.Unexpected(new IllegalStateException("emile: empty DNS result"))
+        EffIO.fail(error)
+      case head :: rest => connectRaw(head).catchAll(err => tryAddresses(rest, err :: failures))
 
   private def allocConnectReq(): Ptr[Byte] =
     val req = stdlib.calloc(1.toCSize, LibUV.uv_req_size(LibUV.UV_CONNECT))

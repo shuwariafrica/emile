@@ -119,6 +119,7 @@ private[unsafe] object LibUVExtern:
   def uv_req_size(reqType: CInt): CSize = extern
   def uv_req_get_data(req: Ptr[Byte]): Ptr[Byte] = extern
   def uv_req_set_data(req: Ptr[Byte], data: Ptr[Byte]): Unit = extern
+  def uv_cancel(req: Ptr[Byte]): CInt = extern
 
   def uv_async_init(loop: Ptr[Byte], handle: Ptr[Byte], asyncCb: LibUV.AsyncCB): CInt = extern
   def uv_async_send(handle: Ptr[Byte]): CInt = extern
