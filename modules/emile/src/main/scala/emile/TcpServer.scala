@@ -31,9 +31,6 @@ import emile.unsafe.LibUV
 import emile.unsafe.LibuvPoller
 import emile.unsafe.Routing
 
-/** Backing state for a [[TcpServer]]: the libuv listener, its owning loop, the address captured at
-  * bind, and the connection-signal queue that the libuv connection callback fills.
-  */
 final private[emile] class TcpServerState(
   val handle: Ptr[Byte],
   val poller: LibuvPoller,
@@ -41,14 +38,12 @@ final private[emile] class TcpServerState(
   val connections: UnboundedQueue[IO, Either[EmileError.Io, Unit]]
 )
 
-/** A listening TCP server. Acquired through [[Tcp$ Tcp]] and exposed through
+/** A listening TCP server, acquired through [[Tcp$ Tcp]]. Accept operations are on
   * [[TcpServer$ TcpServer]].
   */
 opaque type TcpServer = TcpServerState
 
-/** Companion of [[TcpServer]] - holds the extensions and the package-internal construction /
-  * release the [[Tcp$ Tcp]] `bind` overloads use.
-  */
+/** Accept operations, factories, and equality for [[TcpServer]]. */
 object TcpServer:
 
   given CanEqual[TcpServer, TcpServer] = CanEqual.derived
@@ -66,21 +61,16 @@ object TcpServer:
     def connections: EmStream[EmileError.Io, TcpSocket] =
       Stream.resource(server.acceptOne).repeat
 
-    /** A scoped accept of a single connection. Waits for the next `uv_connection_cb`, runs
-      * `uv_accept` on the owner thread, and yields the resulting [[TcpSocket]] - whose release runs
-      * the canonical socket cleanup (`uv_read_stop`, bridge clear, `uv_close`).
+    /** A single accepted connection as a scoped resource - the socket closes when the resource's
+      * scope ends.
       */
     def acceptOne: EmResource[EmileError.Io, TcpSocket] =
       Resource.make[EffIO.Of[EmileError.Io], TcpSocket](acceptNext(server))(socket => EffIO.liftF(TcpSocket.release(socket)))
 
   end extension
 
-  // ============================ Package-internal acquire / release ============================
-
   /** Build the server state and store it in the listen handle's `data` slot so [[connectionCb]] can
-    * recover it. Bridge storage is done here - inside the companion - so the underlying
-    * [[TcpServerState]] class is reachable as `AnyRef` without an opaque-type cast at the call
-    * site.
+    * recover it. Storing here, inside the companion, avoids an opaque-type cast at the call site.
     */
   private[emile] def construct(
     handle: Ptr[Byte],
@@ -109,8 +99,6 @@ object TcpServer:
     val state = CallbackBridge.load[TcpServerState](handle)
     val signal: Either[EmileError.Io, Unit] = if status < 0 then Left(IoMapping.fromCode(status)) else Right(())
     state.connections.unsafeOffer(signal)
-
-  // ============================ Internals ============================
 
   private def acceptNext(server: TcpServer): EmIO[EmileError.Io, TcpSocket] =
     EffIO.lift(

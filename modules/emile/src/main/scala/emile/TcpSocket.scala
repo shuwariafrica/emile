@@ -40,9 +40,6 @@ import emile.unsafe.ResizableBuffer
 import emile.unsafe.Routing
 import emile.unsafe.SockAddr
 
-/** Backing state for a [[TcpSocket]]: the libuv handle, its owning loop, the addresses captured at
-  * connect / accept, and the per-socket read buffer reused across one-shot and persistent reads.
-  */
 final private class TcpSocketState(
   val handle: Ptr[Byte],
   val poller: LibuvPoller,
@@ -51,31 +48,23 @@ final private class TcpSocketState(
   val readBuffer: ResizableBuffer
 )
 
-/** A connected TCP socket. Acquired through [[Tcp]] or [[TcpServer]]; the operations live as
-  * extensions and as companion aliases on [[TcpSocket$ TcpSocket]].
+/** A connected TCP socket, acquired through [[Tcp]] or [[TcpServer]]. Read, write, and lifecycle
+  * operations are on [[TcpSocket$ TcpSocket]].
   */
 opaque type TcpSocket = TcpSocketState
 
-/** Companion of [[TcpSocket]] - holds the extensions, the non-curried companion aliases for the
-  * multi-parameter ones, and the package-internal acquire / release the [[Tcp]] and [[TcpServer]]
-  * constructors use.
-  */
+/** Operations, factories, and equality for [[TcpSocket]]. */
 object TcpSocket:
 
-  /** Per-allocation size handed to libuv's `alloc_cb` for the persistent read modes ([[reads]],
-    * [[consume]]) - generous enough to fit a single recv cluster without wasting GC pressure.
-    */
+  /** Buffer size for the persistent read modes - one recv cluster without excess GC pressure. */
   inline val DefaultReadSize = 65536
 
-  /** Capacity of the back-pressure queue behind [[reads]]. A small bound is enough: the per-call
-    * loop-thread staging slot absorbs the chunk that finds the queue full, then [[reads]] pauses
-    * the libuv read watcher until the consumer pulls.
+  /** Back-pressure queue depth behind [[reads]]; the loop-thread staging slot absorbs the overflow
+    * chunk.
     */
   inline val ReadsQueueCapacity = 4
 
   given CanEqual[TcpSocket, TcpSocket] = CanEqual.derived
-
-  // ============================ Companion aliases (non-curried call sites) ============================
 
   inline def read(socket: TcpSocket, maxBytes: Int): EmIO[EmileError.Io, Option[Chunk[Byte]]] =
     socket.read(maxBytes)
@@ -97,8 +86,6 @@ object TcpSocket:
     socket.consume(onChunk)
   inline def onLoop[A](socket: TcpSocket, thunk: => A): EmIO[EmileError.Io, A] =
     socket.onLoop(thunk)
-
-  // ============================ Extensions ============================
 
   extension (socket: TcpSocket)
 
@@ -193,8 +180,6 @@ object TcpSocket:
 
   end extension
 
-  // ============================ Package-internal acquire / release ============================
-
   /** Build a [[TcpSocket]] over an already-initialised libuv handle - called from [[Tcp$ Tcp]] and
     * [[TcpServer]] once `uv_tcp_init` (+ `uv_tcp_connect` or `uv_accept`) and the address-capture
     * have succeeded.
@@ -240,17 +225,12 @@ object TcpSocket:
     if rc != 0 then Left(rc)
     else SockAddr.read(storage).toRight(0)
 
-  // ============================ Internals ============================
-
   // FFI: handle/req allocation null-checks, read-receiver var/null sentinels, stackalloc fd cell
   // for uv_fileno, chunk-reachability holder, C-bridge asInstanceOf recoveries.
   // scalafix:off DisableSyntax
 
-  // ---- Read trampolines (one allocCb / readCb pair across every read mode) ----
-
-  /** The data slot stores a [[ReadReceiver]] whose two function fields the trampolines call.
-    * Different read modes plug in their own alloc / deliver closures.
-    */
+  // Stored in the handle's data slot; the alloc/read trampolines invoke its two closures, so each read
+  // mode supplies its own alloc/deliver behaviour without a dedicated trampoline.
   final private case class ReadReceiver(
     alloc: (CSize, Ptr[LibUV.Buf]) => Unit,
     deliver: (CSSize, Ptr[LibUV.Buf]) => Unit
@@ -261,8 +241,6 @@ object TcpSocket:
 
   private val readCb: LibUV.ReadCB = (handle: Ptr[Byte], nread: CSSize, buf: Ptr[LibUV.Buf]) =>
     CallbackBridge.load[ReadReceiver](handle).deliver(nread, buf)
-
-  // ---- One-shot read ----
 
   private def readOnce(socket: TcpSocket, maxBytes: Int): EmIO[EmileError.Io, Option[Chunk[Byte]]] =
     EffIO.attempt(
@@ -300,8 +278,6 @@ object TcpSocket:
           else cb(Left(IoMapping.fromCode(nreadInt)))
     )
 
-  // ---- Accumulating read (readN) ----
-
   private def readNBytes(socket: TcpSocket, numBytes: Int): EmIO[EmileError.Io, Chunk[Byte]] =
     def go(acc: Chunk[Byte]): EmIO[EmileError.Io, Chunk[Byte]] =
       if acc.size >= numBytes then EffIO.succeed(acc)
@@ -310,8 +286,6 @@ object TcpSocket:
           case Some(chunk) => go(acc ++ chunk)
           case None => EffIO.succeed(acc)
     go(Chunk.empty[Byte])
-
-  // ---- One-shot zero-copy read ----
 
   private def readPtrOnce[A](
     socket: TcpSocket,
@@ -354,8 +328,6 @@ object TcpSocket:
           else if nreadInt == ErrorCode.UV_EOF then cb(Right(None))
           else cb(Left(IoMapping.fromCode(nreadInt)))
     )
-
-  // ---- Persistent copying read with pause / resume back-pressure ----
 
   final private class ReadsState(
     val socket: TcpSocket,
@@ -443,8 +415,6 @@ object TcpSocket:
     end if
   end readsResume
 
-  // ---- Persistent zero-copy consume ----
-
   private def consumeAll(socket: TcpSocket, onChunk: (Ptr[Byte], Int) => Unit): EmIO[EmileError.Io, Unit] =
     EffIO.attempt(
       IO.async[Unit] { cb =>
@@ -488,21 +458,15 @@ object TcpSocket:
             cb(Left(IoMapping.fromCode(nreadInt)))
     )
 
-  // ---- Writes ----
-
-  /** Holds the chunk reachable across the in-flight `uv_write` while delivering the write outcome
-    * to the request's `IO.async` continuation. The poller is captured so the `writeCb` trampoline
-    * can release the request's anchor entry.
-    */
+  // Keeps the chunk reachable across the in-flight uv_write, and carries the poller the writeCb
+  // trampoline needs to release the request's anchor.
   final private class WriteState(
     val poller: LibuvPoller,
     val cb: Either[Throwable, Unit] => Unit,
     @scala.annotation.unused val keepAlive: AnyRef
   )
 
-  /** Sentinel for the keep-alive slot of a [[writePtr]] write - the caller owns the buffer, so
-    * nothing on our side needs to stay reachable.
-    */
+  // Keep-alive sentinel for writePtr: the caller owns the buffer, so nothing of ours must stay reachable.
   private val NoKeepAlive: AnyRef = new AnyRef
 
   private def writeChunk(socket: TcpSocket, chunk: Chunk[Byte]): EmIO[EmileError.Io, Unit] =
@@ -561,8 +525,6 @@ object TcpSocket:
     if status < 0 then state.cb(Left(IoMapping.fromCode(status)))
     else state.cb(Right(()))
 
-  // ---- sendFile ----
-
   private def sendFileFromOpen(
     socket: TcpSocket,
     file: OpenFile,
@@ -608,8 +570,6 @@ object TcpSocket:
 
   private val fsCb: LibUV.FsCB = (req: Ptr[Byte]) => CallbackBridge.loadReq[Ptr[Byte] => Unit](req).apply(req)
 
-  // ---- Socket options ----
-
   private def noDelay(socket: TcpSocket, enabled: Boolean): EmIO[EmileError.Io, Unit] =
     EffIO.lift(
       Routing.onOwner(socket.poller):
@@ -633,8 +593,6 @@ object TcpSocket:
         if rc < 0 then Left(IoMapping.fromCode(rc)) else Right(())
     )
 
-  // ---- Half-close ----
-
   private def shutdownWrite(socket: TcpSocket): IO[Unit] =
     IO.async[Unit]: cb =>
       Routing.onOwner(socket.poller):
@@ -656,10 +614,8 @@ object TcpSocket:
   private val shutdownCb: LibUV.ShutdownCB = (req: Ptr[Byte], status: CInt) =>
     CallbackBridge.loadReq[(Int, Ptr[Byte]) => Unit](req).apply(status, req)
 
-  /** `shutdown(fd, SHUT_RD)` over the raw socket fd. `uv_shutdown` only covers the write side, so
-    * the read half-close goes through the posix syscall. On Linux a libuv error code is `-errno`,
-    * so a failure maps cleanly through [[IoMapping]].
-    */
+  // uv_shutdown half-closes only the write side, so the read half-close is a raw shutdown(fd, SHUT_RD);
+  // on Linux a libuv error is -errno, so failures still map through IoMapping.
   private def shutdownRead(socket: TcpSocket): Either[EmileError.Io, Unit] =
     val fdCell = stackalloc[CInt]()
     val rc1 = LibUV.uv_fileno(socket.handle, fdCell)
@@ -673,18 +629,12 @@ object TcpSocket:
         else Left(IoMapping.fromCode(-err))
       else Right(())
 
-  // ---- onLoop ----
-
   private def runOnLoop[A](socket: TcpSocket, thunk: => A): EmIO[EmileError.Io, A] =
     EffIO.attempt(Routing.onOwner(socket.poller)(thunk), EmileError.Io.Unexpected(_))
-
-  // ---- Trampoline helpers ----
 
   private def stopRead(poller: LibuvPoller, handle: Ptr[Byte]): Unit =
     LibUV.uv_read_stop(handle): Unit
     CallbackBridge.clear(poller, handle)
-
-  // ---- Allocation helpers (null calloc result is OOM, surfaced by a throw) ----
 
   private def allocWriteReq(): Ptr[Byte] =
     val req = stdlib.calloc(1.toCSize, LibUV.uv_req_size(LibUV.UV_WRITE))

@@ -39,7 +39,6 @@ private[emile] object LibUV:
     CUnsignedLongLong
   ]
 
-  // Callback function-pointer types (libuv `uv_*_cb`).
   type AllocCB = CFuncPtr3[Ptr[Byte], CSize, Ptr[Buf], Unit]
   type ReadCB = CFuncPtr3[Ptr[Byte], CSSize, Ptr[Buf], Unit]
   type WriteCB = CFuncPtr2[Ptr[Byte], CInt, Unit]
@@ -100,7 +99,6 @@ end LibUV
 @extern
 private[unsafe] object LibUVExtern:
 
-  // Loop
   def uv_loop_init(loop: Ptr[Byte]): CInt = extern
   def uv_loop_close(loop: Ptr[Byte]): CInt = extern
   def uv_loop_alive(loop: Ptr[Byte]): CInt = extern
@@ -111,7 +109,6 @@ private[unsafe] object LibUVExtern:
   @blocking def uv_run(loop: Ptr[Byte], mode: CInt): CInt = extern
   def uv_walk(loop: Ptr[Byte], walkCb: LibUV.WalkCB, arg: Ptr[Byte]): Unit = extern
 
-  // Handles
   def uv_handle_size(handleType: CInt): CSize = extern
   def uv_handle_get_data(handle: Ptr[Byte]): Ptr[Byte] = extern
   def uv_handle_set_data(handle: Ptr[Byte], data: Ptr[Byte]): Unit = extern
@@ -119,16 +116,13 @@ private[unsafe] object LibUVExtern:
   def uv_is_closing(handle: Ptr[Byte]): CInt = extern
   def uv_fileno(handle: Ptr[Byte], fd: Ptr[CInt]): CInt = extern
 
-  // Requests
   def uv_req_size(reqType: CInt): CSize = extern
   def uv_req_get_data(req: Ptr[Byte]): Ptr[Byte] = extern
   def uv_req_set_data(req: Ptr[Byte], data: Ptr[Byte]): Unit = extern
 
-  // Async
   def uv_async_init(loop: Ptr[Byte], handle: Ptr[Byte], asyncCb: LibUV.AsyncCB): CInt = extern
   def uv_async_send(handle: Ptr[Byte]): CInt = extern
 
-  // Timer
   def uv_timer_init(loop: Ptr[Byte], handle: Ptr[Byte]): CInt = extern
   def uv_timer_start(
     handle: Ptr[Byte],
@@ -138,7 +132,6 @@ private[unsafe] object LibUVExtern:
   ): CInt = extern
   def uv_timer_stop(handle: Ptr[Byte]): CInt = extern
 
-  // Stream
   def uv_listen(stream: Ptr[Byte], backlog: CInt, connectionCb: LibUV.ConnectionCB): CInt = extern
   def uv_accept(server: Ptr[Byte], client: Ptr[Byte]): CInt = extern
   def uv_read_start(stream: Ptr[Byte], allocCb: LibUV.AllocCB, readCb: LibUV.ReadCB): CInt = extern
@@ -152,7 +145,6 @@ private[unsafe] object LibUVExtern:
   ): CInt = extern
   def uv_shutdown(req: Ptr[Byte], handle: Ptr[Byte], shutdownCb: LibUV.ShutdownCB): CInt = extern
 
-  // TCP
   def uv_tcp_init(loop: Ptr[Byte], handle: Ptr[Byte]): CInt = extern
   def uv_tcp_bind(handle: Ptr[Byte], addr: Ptr[Byte], flags: CUnsignedInt): CInt = extern
   def uv_tcp_connect(req: Ptr[Byte], handle: Ptr[Byte], addr: Ptr[Byte], connectCb: LibUV.ConnectCB): CInt = extern
@@ -168,17 +160,14 @@ private[unsafe] object LibUVExtern:
   def uv_tcp_getsockname(handle: Ptr[Byte], name: Ptr[Byte], nameLen: Ptr[CInt]): CInt = extern
   def uv_tcp_getpeername(handle: Ptr[Byte], name: Ptr[Byte], nameLen: Ptr[CInt]): CInt = extern
 
-  // Poll
   def uv_poll_init(loop: Ptr[Byte], handle: Ptr[Byte], fd: CInt): CInt = extern
   def uv_poll_start(handle: Ptr[Byte], events: CInt, pollCb: LibUV.PollCB): CInt = extern
   def uv_poll_stop(handle: Ptr[Byte]): CInt = extern
 
-  // Signal
   def uv_signal_init(loop: Ptr[Byte], handle: Ptr[Byte]): CInt = extern
   def uv_signal_start(handle: Ptr[Byte], signalCb: LibUV.SignalCB, signum: CInt): CInt = extern
   def uv_signal_stop(handle: Ptr[Byte]): CInt = extern
 
-  // DNS
   def uv_getaddrinfo(
     loop: Ptr[Byte],
     req: Ptr[Byte],
@@ -196,7 +185,6 @@ private[unsafe] object LibUVExtern:
     flags: CInt
   ): CInt = extern
 
-  // File system
   def uv_fs_open(loop: Ptr[Byte], req: Ptr[Byte], path: CString, flags: CInt, mode: CInt, cb: LibUV.FsCB): CInt = extern
   def uv_fs_close(loop: Ptr[Byte], req: Ptr[Byte], file: CInt, cb: LibUV.FsCB): CInt = extern
   def uv_fs_fstat(loop: Ptr[Byte], req: Ptr[Byte], file: CInt, cb: LibUV.FsCB): CInt = extern
@@ -213,13 +201,11 @@ private[unsafe] object LibUVExtern:
   def uv_fs_get_result(req: Ptr[Byte]): CSSize = extern
   def uv_fs_get_statbuf(req: Ptr[Byte]): Ptr[LibUV.Stat] = extern
 
-  // Addresses
   def uv_ip4_addr(ip: CString, port: CInt, addr: Ptr[Byte]): CInt = extern
   def uv_ip6_addr(ip: CString, port: CInt, addr: Ptr[Byte]): CInt = extern
   def uv_ip4_name(src: Ptr[Byte], dst: CString, size: CSize): CInt = extern
   def uv_ip6_name(src: Ptr[Byte], dst: CString, size: CSize): CInt = extern
 
-  // Errors and version
   def uv_strerror_r(err: CInt, buf: CString, buflen: CSize): CString = extern
   def uv_err_name_r(err: CInt, buf: CString, buflen: CSize): CString = extern
   def uv_version(): CUnsignedInt = extern

@@ -56,17 +56,15 @@ private[emile] object Routing:
               None
     }
 
-  /** Fast path: run `thunk` on the owner. Only `NonFatal` is captured; a fatal throw propagates to
-    * cats-effect's fatal handler.
-    */
+  // Fast path on the owner: only NonFatal is captured; a fatal throw propagates to cats-effect's
+  // fatal handler.
   private def runOnOwner[A](thunk: => A): Either[Throwable, A] =
     try Right(thunk)
     catch case NonFatal(t) => Left(t)
 
-  /** Cross-thread path: run `thunk` from the submitted runnable. Captures *every* throwable so the
-    * `IO.async` callback always fires - a fatal escaping here is swallowed by the poller's
-    * `taskDrainCb`, hanging the fibre on a callback that never completes.
-    */
+  // Cross-thread path from the submitted runnable: captures every throwable so the IO.async callback
+  // always fires - a fatal escaping here is swallowed by the poller's taskDrainCb, hanging the fibre
+  // on a callback that never completes.
   private def runOffOwner[A](thunk: => A): Either[Throwable, A] =
     try Right(thunk)
     catch case t: Throwable => Left(t)
@@ -83,14 +81,10 @@ private[emile] object Routing:
         LibUV.uv_close(handle, closeHandleCb)
         None
 
-  /** Holder for [[closeHandle]]'s completion: carries the poller (for anchor release) and the
-    * `IO.async` continuation.
-    */
+  // Holder for closeHandle's completion: carries the poller (for anchor release) and the continuation.
   final private[unsafe] class CloseCompletion(val poller: LibuvPoller, val cb: Either[Throwable, Unit] => Unit)
 
-  /** `uv_close` callback for [[closeHandle]]: releases the anchor, frees the handle, then completes
-    * the release.
-    */
+  // uv_close callback for closeHandle: release the anchor, free the handle, then complete the release.
   private val closeHandleCb: LibUV.CloseCB = (handle: Ptr[Byte]) =>
     val completion = CallbackBridge.load[CloseCompletion](handle)
     CallbackBridge.clear(completion.poller, handle)
