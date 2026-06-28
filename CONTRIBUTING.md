@@ -96,6 +96,24 @@ named image and forwards `EMILE_SYSTEM_LIBUV` / `EMILE_STATIC_LINK` into the con
 Run `sbt format` before pushing - it runs `scalafixAll`, `scalafmtAll`, `scalafmtSbt`, and `headerCreateAll` together;
 an unsuppressed `DisableSyntax` lint or a compile failure fails the run.
 
+## Documentation and comments
+
+Documentation earns its place; it is not ceremony. For every item, of any visibility, the test is whether the
+specific reader gains something the name and signature do not already convey. If not, write one line or nothing.
+
+- **Scaladoc (`/** */`) documents an interface** - a public API for its users, or a package-internal API
+  (`private[emile]` / `private[unsafe]`) consumed across files for its contributors. Keep it terse: state the
+  behaviour, document a parameter only where its meaning is non-obvious, describe a type's representation, and
+  link a companion with an alias (`[[Foo$ Foo]]`).
+- **Bare-`private` implementation is not an interface** - it carries no Scaladoc. Where a step is non-obvious a
+  single inline `//` explains *why* (it never restates *what* the code already says); where it is self-evident
+  it carries nothing.
+- **No decoration** - no section-divider banners (`// ==== ... ====`); the code's own structure organises the file.
+- **Current state only** - comments and Scaladoc describe what the code does now, never planned or removed work,
+  and never reference internal design notes; the only outward pointers are to published standards (e.g. RFC 7519)
+  or this repository's own documentation.
+- **Language** - ASCII only, UK English, and ` - ` (a spaced hyphen) rather than an em-dash.
+
 ## Contribution workflow
 
 1. Branch off `main` (PRs coming from `main` will not be accepted).

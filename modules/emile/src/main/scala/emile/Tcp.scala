@@ -43,9 +43,8 @@ object Tcp:
   def bind(address: SocketAddress[IpAddress]): EmResource[EmileError.Bind, TcpServer] =
     bind(address, TcpOptions.default)
 
-  /** Bind a listening server on `address` with `options`. `uv_tcp_init`, `uv_tcp_bind`, and
-    * `uv_listen` run in acquire together so every failure surfaces here, never later on the
-    * connection stream.
+  /** Bind a listening server on `address` with `options`. Binding and listening complete during
+    * acquire, so every failure surfaces here rather than later on the connection stream.
     */
   def bind(address: SocketAddress[IpAddress], options: TcpOptions): EmResource[EmileError.Bind, TcpServer] =
     Resource.make[EffIO.Of[EmileError.Bind], TcpServer](bindAcquire(address, options))(server => EffIO.liftF(TcpServer.release(server)))
@@ -73,8 +72,6 @@ object Tcp:
     Resource
       .make[EffIO.Of[EmileError.HostConnect], TcpSocket](hostConnectAcquire(host, port))(socket => EffIO.liftF(TcpSocket.release(socket)))
       .evalTap(applyPostConnect(_, options))
-
-  // ============================ Bind ============================
 
   private def bindAcquire(address: SocketAddress[IpAddress], options: TcpOptions): EmIO[EmileError.Bind, TcpServer] =
     EffIO.attempt(
@@ -159,8 +156,6 @@ object Tcp:
     if options.reusePort then flags = flags | LibUV.UV_TCP_REUSEPORT
     if options.ipv6Only then flags = flags | LibUV.UV_TCP_IPV6ONLY
     flags.toUInt
-
-  // ============================ Connect (by IpAddress) ============================
 
   private def connectRaw(address: SocketAddress[IpAddress]): EmIO[EmileError.Connect, TcpSocket] =
     EffIO.attempt(
@@ -249,8 +244,6 @@ object Tcp:
 
   private def ioToConnect(error: EmileError.Io): EmileError.Connect = EmileError.Connect.Unexpected(error)
 
-  // ============================ Connect (by host + port) ============================
-
   private def hostConnectAcquire(host: Host, port: Port): EmIO[EmileError.HostConnect, TcpSocket] =
     Dns.resolve(host, port).flatMap(addresses => tryAddresses(addresses.toList, lastError = None))
 
@@ -264,8 +257,6 @@ object Tcp:
           lastError.getOrElse(EmileError.Connect.Unexpected(new IllegalStateException("emile: empty DNS result")))
         )
       case head :: rest => connectRaw(head).catchAll(err => tryAddresses(rest, Some(err)))
-
-  // ============================ Helpers ============================
 
   private def allocConnectReq(): Ptr[Byte] =
     val req = stdlib.calloc(1.toCSize, LibUV.uv_req_size(LibUV.UV_CONNECT))

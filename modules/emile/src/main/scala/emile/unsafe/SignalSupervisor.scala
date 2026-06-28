@@ -42,9 +42,8 @@ import emile.SignalNumber
 @scala.annotation.internal.sharable
 private[emile] object SignalSupervisor:
 
-  /** Per-signum state - the subscriber queues and whether the `uv_signal_t` is installed. Touched
-    * only on the supervisor loop thread.
-    */
+  // Per-signum state, touched only on the supervisor loop thread, so its buffer and flag need no
+  // synchronisation.
   final private class SignalState:
     val subscribers: mutable.ListBuffer[UnboundedQueue[IO, Unit]] = mutable.ListBuffer.empty
     var installed: Boolean = false
@@ -68,10 +67,8 @@ private[emile] object SignalSupervisor:
   private def checked(rc: Int): Unit =
     if rc != 0 then throw EmileError.Runtime.System(ErrorCode(rc))
 
-  /** Install one `uv_signal_t` for `signum` on the supervisor loop. Runs on the supervisor loop
-    * thread. The handle is never uninstalled - an idle `uv_signal_t` costs nothing, and
-    * `LibuvPoller.close()`'s `uv_walk` sweep frees it at shutdown.
-    */
+  // Runs on the supervisor loop thread. The handle is never uninstalled - an idle uv_signal_t costs
+  // nothing, and LibuvPoller.close()'s uv_walk sweep frees it at shutdown.
   private def installHandle(signum: SignalNumber): Unit =
     val handle = stdlib.calloc(1.toCSize, LibUV.uv_handle_size(LibUV.UV_SIGNAL))
     if handle == null then throw new OutOfMemoryError("emile: uv_signal_t allocation failed")
@@ -84,10 +81,6 @@ private[emile] object SignalSupervisor:
   def subscribe(signum: SignalNumber): Stream[IO, Unit] =
     Stream.resource(register(signum)).flatMap(q => Stream.repeatEval(q.take))
 
-  /** Acquire on the supervisor thread: create the subscriber queue, add it to the signum's list,
-    * and install the `uv_signal_t` on the first subscriber. Release on the supervisor thread:
-    * remove the queue.
-    */
   private def register(signum: SignalNumber): Resource[IO, UnboundedQueue[IO, Unit]] =
     Resource.make(
       UnboundedQueue[IO, Unit].flatMap { queue =>
@@ -107,10 +100,9 @@ private[emile] object SignalSupervisor:
       }
     }
 
-  /** `uv_signal_cb`, run on the supervisor loop thread. libuv passes the signum directly, so no
-    * `handle->data` recovery is needed; `SignalNumber.wrap` is the unchecked constructor, as libuv
-    * guarantees a valid signum and a validating one must never throw across the C ABI.
-    */
+  // uv_signal_cb on the supervisor loop thread. libuv passes the signum directly, so no handle->data
+  // recovery is needed; wrap is the unchecked constructor, as libuv guarantees a valid signum and a
+  // validating one must never throw across the C ABI.
   private val signalCb: LibUV.SignalCB = (_: Ptr[Byte], signum: Int) =>
     state.get(SignalNumber.wrap(signum)) match
       case Some(st) => st.subscribers.foreach(_.unsafeOffer(()))

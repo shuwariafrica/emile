@@ -30,9 +30,6 @@ import emile.unsafe.LibUV
 import emile.unsafe.LibuvPoller
 import emile.unsafe.Routing
 
-/** The `uv_async_t` handle, its owning loop, and the queue carrying coalesced wake-ups to
-  * [[AsyncSignal.fires]] - the representation behind [[AsyncSignal]].
-  */
 final private class AsyncSignalState(
   val handle: Ptr[Byte],
   val poller: LibuvPoller,
@@ -56,8 +53,8 @@ object AsyncSignal:
   given CanEqual[AsyncSignal, AsyncSignal] = CanEqual.derived
 
   extension (signal: AsyncSignal)
-    /** Wakes the owning loop. Thread-safe - `uv_async_send` is libuv's cross-thread primitive, so
-      * this bypasses worker-affinity routing and calls it directly.
+    /** Wakes the owning loop; thread-safe and callable from any thread, as `uv_async_send` is
+      * libuv's cross-thread primitive.
       */
     def fire: EmIO[EmileError.Io, Unit] =
       EffIO.suspend(LibUV.uv_async_send(signal.handle): Unit)
@@ -80,7 +77,6 @@ object AsyncSignal:
   private def release(signal: AsyncSignal): EmIO[EmileError.Io, Unit] =
     EffIO.liftF(Routing.closeHandle(signal.poller, signal.handle))
 
-  /** Initialise the handle on its loop thread, publish the state into its `data` slot. */
   private def install(
     poller: LibuvPoller,
     handle: Ptr[Byte],
@@ -103,7 +99,7 @@ object AsyncSignal:
     else handle
   // scalafix:on DisableSyntax
 
-  /** `uv_async_cb` - offers a wake-up to the handle's subscriber queue; runs on the loop. */
+  // uv_async_cb: offer a wake-up to the subscriber queue; runs on the loop thread.
   private val asyncCb: LibUV.AsyncCB = (handle: Ptr[Byte]) => CallbackBridge.load[AsyncSignalState](handle).wakeups.unsafeOffer(())
 
 end AsyncSignal

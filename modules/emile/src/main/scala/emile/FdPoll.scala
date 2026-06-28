@@ -33,9 +33,6 @@ import emile.unsafe.Routing
 enum FdEvent derives CanEqual:
   case Readable, Writable, Disconnect, Prioritized
 
-/** The `uv_poll_t` handle, its owning loop, and the libuv readiness bitmask to watch - the
-  * representation behind [[FdPoll]].
-  */
 final private class FdPollState(val handle: Ptr[Byte], val poller: LibuvPoller, val eventMask: Int)
 
 /** A file-descriptor readiness watcher, backed by a libuv `uv_poll_t`. Acquired through
@@ -74,7 +71,6 @@ object FdPoll:
   private def release(poll: FdPoll): EmIO[EmileError.Io, Unit] =
     EffIO.liftF(Routing.closeHandle(poll.poller, poll.handle))
 
-  /** Initialise the poll handle on its loop thread. */
   private def install(
     poller: LibuvPoller,
     handle: Ptr[Byte],
@@ -87,7 +83,6 @@ object FdPoll:
       Left(IoMapping.fromCode(rc))
     else Right(new FdPollState(handle, poller, eventMask(events)))
 
-  /** Arm a one-shot poll: the trampoline delivers the first readiness callback and stops. */
   private def startPoll(poll: FdPoll): IO[Set[FdEvent]] =
     IO.async[Set[FdEvent]]: cb =>
       Routing.onOwner(poll.poller):
@@ -99,16 +94,12 @@ object FdPoll:
           None
         else Some(Routing.onOwner(poll.poller)(stopPoll(poll.poller, poll.handle)))
 
-  /** Stop polling and clear the handle's callback slot - the one-shot trampoline cleanup and the
-    * cancellation finaliser both run this; `uv_poll_stop` is idempotent.
-    */
+  // Both the one-shot trampoline and the cancellation finaliser run this; uv_poll_stop is idempotent.
   private def stopPoll(poller: LibuvPoller, handle: Ptr[Byte]): Unit =
     LibUV.uv_poll_stop(handle): Unit
     CallbackBridge.clear(poller, handle)
 
-  /** Holder for [[startPoll]]'s `IO.async` continuation; carries the poller for the trampoline's
-    * `stopPoll` (which must clear the handle's anchor).
-    */
+  // Carries the poller so the trampoline's stopPoll can clear the handle's anchor.
   final private class PollHolder(val poller: LibuvPoller, val cb: Either[Throwable, Set[FdEvent]] => Unit)
 
   private def eventBit(event: FdEvent): Int = event match
@@ -131,7 +122,7 @@ object FdPoll:
     else handle
   // scalafix:on DisableSyntax
 
-  /** `uv_poll_cb` - delivers the first readiness event, then stops the one-shot poll. */
+  // uv_poll_cb: deliver the first readiness event, then stop the one-shot poll.
   private val pollCb: LibUV.PollCB = (handle: Ptr[Byte], status: CInt, events: CInt) =>
     val holder = CallbackBridge.load[PollHolder](handle)
     stopPoll(holder.poller, handle)

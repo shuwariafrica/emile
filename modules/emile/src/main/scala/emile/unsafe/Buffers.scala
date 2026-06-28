@@ -18,9 +18,9 @@ package emile.unsafe
 import scala.scalanative.libc.stdlib
 import scala.scalanative.unsafe.Ptr
 
-/** A native byte buffer that grows on demand. */
 // raw malloc/realloc/free buffer: var pointer and capacity, null-on-OOM checks, OutOfMemoryError throw.
 // scalafix:off DisableSyntax
+/** A native byte buffer that grows on demand. */
 final private[emile] class ResizableBuffer private (private var buffer: Ptr[Byte], private var capacity: Int):
 
   /** A buffer of at least `size` bytes; a pointer from an earlier `ensure` is invalidated when a

@@ -169,14 +169,12 @@ end LibuvPoller
   */
 object LibuvPoller:
 
-  /** Recover the [[LibuvPoller]] a handle belongs to from its `uv_handle->data` slot. */
   private inline def pollerOf(handle: Ptr[Byte]): LibuvPoller =
     Intrinsics.castRawPtrToObject(toRawPtr(LibUV.uv_handle_get_data(handle))).asInstanceOf[LibuvPoller]
 
-  /** Drains the cross-thread task queue. The submitted runnables capture every throwable and
-    * complete their own `IO.async` callback, so this blanket catch is only a backstop: a throw must
-    * never cross the C ABI.
-    */
+  // Drains the cross-thread task queue. The submitted runnables capture every throwable and complete
+  // their own IO.async callback, so this blanket catch is only a backstop: a throw must never cross
+  // the C ABI.
   private val taskDrainCb: LibUV.AsyncCB = (handle: Ptr[Byte]) =>
     val poller = pollerOf(handle)
     var r = poller.taskQueue.poll()
@@ -185,17 +183,17 @@ object LibuvPoller:
       catch case _: Throwable => ()
       r = poller.taskQueue.poll()
 
-  /** Wakes the loop for an interrupt; the `interrupted` flag is read by the next `poll`. */
+  // Empty by design: the uv_async_send wakes the loop; the interrupted flag is read by the next poll.
   private val interruptCb: LibUV.AsyncCB = (_: Ptr[Byte]) => ()
 
-  /** Wakes the loop when a timed `poll`'s deadline expires. */
+  // Empty by design: firing wakes the loop when a timed poll's deadline expires.
   private val timeoutWakeCb: LibUV.TimerCB = (_: Ptr[Byte]) => ()
 
-  /** `uv_walk` callback for `close` - closes every handle that is not already closing. */
+  // uv_walk callback for close: closes every handle that is not already closing.
   private val closeWalkCb: LibUV.WalkCB = (handle: Ptr[Byte], _: Ptr[Byte]) =>
     if LibUV.uv_is_closing(handle) == 0 then LibUV.uv_close(handle, LibuvPoller.freeHandleCb)
 
-  /** `uv_close` callback - frees a handle's C memory once libuv has finished with it. */
+  // uv_close callback: frees a handle's C memory once libuv has finished with it.
   private val freeHandleCb: LibUV.CloseCB = (handle: Ptr[Byte]) => stdlib.free(handle)
 
 end LibuvPoller
