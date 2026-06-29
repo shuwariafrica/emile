@@ -45,7 +45,7 @@ object OpenFile:
     * same file may serve repeated reads.
     */
   def open(path: Path): EmResource[EmileError.Io, OpenFile] =
-    Resource.make[EffIO.Of[EmileError.Io], OpenFile](acquire(path))(release)
+    Resource.makeFull[EffIO.Of[EmileError.Io], OpenFile](poll => poll(acquire(path)))(release)
 
   given CanEqual[OpenFile, OpenFile] = CanEqual.derived
 
@@ -77,18 +77,26 @@ object OpenFile:
       Routing.onOwner(poller):
         val req = allocRequest()
         val rc = startOpen(poller, req, path)
-        if rc < 0 then failRequest(req, cb, rc)
-        else CallbackBridge.storeReq(poller, req, openDeliver(poller, cb))
-        None
+        if rc < 0 then
+          failRequest(req, cb, rc)
+          None
+        else
+          CallbackBridge.storeReq(poller, req, openDeliver(poller, cb))
+          // Cancellation cancels the queued open; its callback fires UV_ECANCELED, which openDeliver
+          // maps to an error and frees the request.
+          Some(Routing.onOwner(poller)(LibUV.uv_cancel(req): Unit))
 
   private def statSize(file: OpenFile): IO[Long] =
     IO.async[Long]: cb =>
       Routing.onOwner(file.poller):
         val req = allocRequest()
         val rc = LibUV.uv_fs_fstat(file.poller.loop, req, file.file, fsCb)
-        if rc < 0 then failRequest(req, cb, rc)
-        else CallbackBridge.storeReq(file.poller, req, statDeliver(file.poller, cb))
-        None
+        if rc < 0 then
+          failRequest(req, cb, rc)
+          None
+        else
+          CallbackBridge.storeReq(file.poller, req, statDeliver(file.poller, cb))
+          Some(Routing.onOwner(file.poller)(LibUV.uv_cancel(req): Unit))
 
   // uv_fs_close; the descriptor is treated as released whatever the close result.
   private def closeFile(file: OpenFile): IO[Unit] =

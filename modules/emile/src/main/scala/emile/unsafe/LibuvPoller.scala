@@ -67,6 +67,10 @@ final private[emile] class LibuvPoller(val config: LoopConfig):
     */
   private[unsafe] val anchors: TrieMap[Long, AnyRef] = new TrieMap[Long, AnyRef]()
 
+  // Outstanding libuv requests keyed by address, maintained by CallbackBridge.storeReq / releaseReq, so
+  // close() can uv_cancel any in-flight threadpool request and avoid a busy-spin / hang at shutdown.
+  private[unsafe] val outstandingReqs: TrieMap[Long, Ptr[Byte]] = new TrieMap[Long, Ptr[Byte]]()
+
   @volatile private[unsafe] var interrupted: Boolean = false
   @volatile private[unsafe] var closed: Boolean = false
 
@@ -157,10 +161,18 @@ final private[emile] class LibuvPoller(val config: LoopConfig):
     // Drop queued tasks unrun: close() runs only at shutdown, after every fibre is cancelled, so a
     // remaining task's awaiting IO.async is already gone.
     while taskQueue.poll() != null do ()
+    // Cancel outstanding threadpool requests directly: close() drives the loop itself and cannot route
+    // through onOwner, and a cancelled request's callback fires promptly so the blocking drain below
+    // terminates. uv_cancel on a non-cancelable (stream) request is a harmless no-op; those are aborted
+    // by the uv_walk handle close instead.
+    outstandingReqs.values.foreach(req => LibUV.uv_cancel(req): Unit)
     LibUV.uv_walk(loop, LibuvPoller.closeWalkCb, loop)
-    while LibUV.uv_loop_alive(loop) != 0 do LibUV.uv_run(loop, LibUV.UV_RUN_NOWAIT): Unit
+    // Blocking ONCE drain, not a NOWAIT 100% spin: each iteration parks until an event. Shutdown
+    // latency is bounded by the slowest still-uncancelable in-flight request.
+    while LibUV.uv_loop_alive(loop) != 0 do LibUV.uv_run(loop, LibUV.UV_RUN_ONCE): Unit
     LibUV.uv_loop_close(loop): Unit
     stdlib.free(loop)
+  end close
 
 end LibuvPoller
 

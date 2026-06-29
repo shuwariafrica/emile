@@ -118,16 +118,21 @@ private[emile] object CallbackBridge:
     poller.anchors.remove(addrOf(handle)): Unit
     LibUV.uv_handle_set_data(handle, fromRawPtr[Byte](Intrinsics.castLongToRawPtr(0L)))
 
-  /** Store `holder` in `req`'s `uv_req->data` slot and anchor it in `poller.anchors`. */
+  /** Store `holder` in `req`'s `uv_req->data` slot, anchor it in `poller.anchors`, and record the
+    * request in `poller.outstandingReqs` so `close()` can cancel it.
+    */
   inline def storeReq(poller: LibuvPoller, req: Ptr[Byte], holder: AnyRef): Unit =
     poller.anchors.put(addrOf(req), holder): Unit
+    poller.outstandingReqs.put(addrOf(req), req): Unit
     LibUV.uv_req_set_data(req, fromRawPtr[Byte](Intrinsics.castObjectToRawPtr(holder)))
 
-  /** Release a request's anchor entry - paired one-to-one with [[storeReq]]; the request's `data`
-    * slot is freed alongside the request itself, so no slot null-out is needed.
+  /** Release a request's anchor and outstanding-request record - paired one-to-one with
+    * [[storeReq]]; the request's `data` slot is freed alongside the request itself, so no slot
+    * null-out is needed.
     */
   inline def releaseReq(poller: LibuvPoller, req: Ptr[Byte]): Unit =
     poller.anchors.remove(addrOf(req)): Unit
+    poller.outstandingReqs.remove(addrOf(req)): Unit
 
   /** Recover the holder previously [[storeReq]]d in `req`'s `data` slot. */
   inline def loadReq[H <: AnyRef](req: Ptr[Byte]): H =

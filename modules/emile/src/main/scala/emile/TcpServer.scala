@@ -65,7 +65,9 @@ object TcpServer:
       * scope ends.
       */
     def acceptOne: EmResource[EmileError.Io, TcpSocket] =
-      Resource.make[EffIO.Of[EmileError.Io], TcpSocket](acceptNext(server))(socket => EffIO.liftF(TcpSocket.release(socket)))
+      // makeFull keeps the accept wait cancelable: Resource.make's acquire is uncancelable, which would
+      // mask acceptNext's poll(take) and hang a cancelled idle accept (e.g. a graceful shutdown).
+      Resource.makeFull[EffIO.Of[EmileError.Io], TcpSocket](poll => poll(acceptNext(server)))(socket => EffIO.liftF(TcpSocket.release(socket)))
 
   end extension
 

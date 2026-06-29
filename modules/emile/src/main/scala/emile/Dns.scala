@@ -94,8 +94,12 @@ object Dns:
         if rc < 0 then
           stdlib.free(req)
           cb(Left(DnsMapping.fromCode(rc, label)))
-        else CallbackBridge.storeReq(poller, req, addrDeliver(poller, cb, label))
-        None
+          None
+        else
+          CallbackBridge.storeReq(poller, req, addrDeliver(poller, cb, label))
+          // Cancellation cancels the queued getaddrinfo; its callback then fires UV_ECANCELED, which
+          // addrDeliver maps to an error and frees the request.
+          Some(Routing.onOwner(poller)(LibUV.uv_cancel(req): Unit))
 
   private def getNameInfo(poller: LibuvPoller, addr: IpAddress): IO[Hostname] =
     IO.async[Hostname]: cb =>
@@ -105,8 +109,10 @@ object Dns:
         if rc < 0 then
           stdlib.free(req)
           cb(Left(DnsMapping.fromCode(rc, addr.toString)))
-        else CallbackBridge.storeReq(poller, req, nameDeliver(poller, cb, addr.toString))
-        None
+          None
+        else
+          CallbackBridge.storeReq(poller, req, nameDeliver(poller, cb, addr.toString))
+          Some(Routing.onOwner(poller)(LibUV.uv_cancel(req): Unit))
 
   private def addrDeliver(
     poller: LibuvPoller,
