@@ -25,7 +25,7 @@ import com.comcast.ip4s.Ipv4Address
 import com.comcast.ip4s.Port
 import com.comcast.ip4s.SocketAddress
 
-/** Covers [[Tcp.bind]] / [[Tcp.connect]] / [[TcpServer.connections]] and the read / write socket
+/** Covers [[Tcp.bind]] / [[Tcp.connect]] / [[TcpServer.accepted]] and the read / write socket
   * surface end-to-end over a loopback round-trip.
   */
 final class TcpSpec extends EmileSuite:
@@ -92,13 +92,15 @@ final class TcpSpec extends EmileSuite:
 
   private def echoRoundTrip(server: TcpServer, payload: Chunk[Byte]): IO[Unit] =
     val srvWork: IO[Unit] =
-      server.connections
-        .evalMap(socket =>
-          socket
-            .read(payload.size)
-            .flatMap:
-              case Some(chunk) => socket.write(chunk)
-              case None => EffIO.succeed(())
+      server.accepted
+        .evalMap(
+          _.use(socket =>
+            socket
+              .read(payload.size)
+              .flatMap:
+                case Some(chunk) => socket.write(chunk)
+                case None => EffIO.succeed(())
+          )
         )
         .head
         .compile
@@ -125,8 +127,8 @@ final class TcpSpec extends EmileSuite:
 
   private def streamingEcho(server: TcpServer, payload: Chunk[Byte]): IO[Unit] =
     val srvWork: IO[Unit] =
-      server.connections
-        .evalMap(socket => socket.reads.through(socket.writes).compile.drain.flatMap(_ => socket.endOfOutput))
+      server.accepted
+        .evalMap(_.use(socket => socket.reads.through(socket.writes).compile.drain.flatMap(_ => socket.endOfOutput)))
         .head
         .compile
         .drain
@@ -153,13 +155,15 @@ final class TcpSpec extends EmileSuite:
 
   private def stressEcho(server: TcpServer, payload: Chunk[Byte], iterations: Int): IO[Unit] =
     val srvWork: IO[Unit] =
-      server.connections
-        .evalMap(socket =>
-          socket
-            .read(payload.size)
-            .flatMap:
-              case Some(chunk) => socket.write(chunk)
-              case None => EffIO.succeed(())
+      server.accepted
+        .evalMap(
+          _.use(socket =>
+            socket
+              .read(payload.size)
+              .flatMap:
+                case Some(chunk) => socket.write(chunk)
+                case None => EffIO.succeed(())
+          )
         )
         .take(iterations.toLong)
         .compile

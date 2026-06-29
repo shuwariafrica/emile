@@ -55,11 +55,13 @@ final class TcpZeroCopySpec extends EmileSuite:
 
   private def zeroCopyEcho(server: TcpServer, payload: Chunk[Byte]): IO[Unit] =
     val srvWork: IO[Unit] =
-      server.connections
-        .evalMap(socket =>
-          socket
-            .readPtr((ptr, len) => socket.writePtr(ptr, len))
-            .map(_ => ())
+      server.accepted
+        .evalMap(
+          _.use(socket =>
+            socket
+              .readPtr((ptr, len) => socket.writePtr(ptr, len))
+              .map(_ => ())
+          )
         )
         .head
         .compile
@@ -88,11 +90,13 @@ final class TcpZeroCopySpec extends EmileSuite:
   // fits the send buffer, so the synchronous write reports the whole chunk.
   private def tryWriteEcho(server: TcpServer, payload: Chunk[Byte]): IO[Unit] =
     val srvWork: IO[Unit] =
-      server.connections
-        .evalMap(socket =>
-          socket
-            .readPtr((ptr, len) => socket.tryWritePtr(ptr, len).map(written => assertEquals(written, len)))
-            .map(_ => ())
+      server.accepted
+        .evalMap(
+          _.use(socket =>
+            socket
+              .readPtr((ptr, len) => socket.tryWritePtr(ptr, len).map(written => assertEquals(written, len)))
+              .map(_ => ())
+          )
         )
         .head
         .compile

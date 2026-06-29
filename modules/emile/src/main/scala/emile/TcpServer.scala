@@ -54,19 +54,12 @@ object TcpServer:
     /** The local address the server is bound to - captured at bind. */
     def address: GenSocketAddress = server.address
 
-    /** Stream of accepted connections. Each emitted [[TcpSocket]] is implicitly resource-scoped:
-      * the socket is closed when the consumer's per-element scope ends. Safe for serial handling
-      * and for `map(s => Stream.eval(handle(s))).parJoin(n)`, but NOT for `parEvalMapUnordered` -
-      * that releases a socket before its handler finishes; use [[accepted]] for unordered
-      * concurrency. Pull-style accept - libuv stops the listener watcher between `uv_connection_cb`
-      * and the next `uv_accept`, so kernel backlog absorbs all slack between arrivals and pulls.
-      */
-    def connections: EmStream[EmileError.Io, TcpSocket] =
-      Stream.resource(server.acceptOne).repeat
-
     /** Stream of accept tokens, each a resource that accepts one connection when used. The socket's
-      * lifetime is the handler's `use` scope, so this is safe under every concurrency combinator:
-      * `server.accepted.parEvalMapUnordered(n)(_.use(handle))`.
+      * lifetime is the handler's `use` scope, so this is safe under every combinator - concurrent
+      * `server.accepted.parEvalMapUnordered(n)(_.use(handle))` and serial
+      * `server.accepted.evalMap(_.use(handle))` alike. Pull-style accept - libuv stops the listener
+      * watcher between `uv_connection_cb` and the next `uv_accept`, so kernel backlog absorbs all
+      * slack between arrivals and pulls.
       */
     def accepted: EmStream[EmileError.Io, EmResource[EmileError.Io, TcpSocket]] =
       Stream.emit(server.acceptOne).covary[EmIO.Of[EmileError.Io]].repeat

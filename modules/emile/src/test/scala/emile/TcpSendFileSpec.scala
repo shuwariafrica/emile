@@ -56,8 +56,8 @@ final class TcpSendFileSpec extends EmileSuite:
         .open(path)
         .widen[EmileError]
         .use(file =>
-          server.connections
-            .evalMap(socket => socket.sendFile(file, 0L, content.length.toLong))
+          server.accepted
+            .evalMap(_.use(socket => socket.sendFile(file, 0L, content.length.toLong)))
             .head
             .compile
             .drain

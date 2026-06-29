@@ -45,11 +45,13 @@ final class TcpCancellationSpec extends EmileSuite:
 
   private def cancelThenRead(server: TcpServer, payload: Chunk[Byte]): IO[Unit] =
     val srvWork: IO[Unit] =
-      server.connections
-        .evalMap(socket =>
-          // Sleep past the client's first-read timeout, then deliver. The client will have
-          // cancelled the first read by then; the second read is what receives this write.
-          EffIO.liftF(IO.sleep(200.millis)) *> socket.write(payload)
+      server.accepted
+        .evalMap(
+          _.use(socket =>
+            // Sleep past the client's first-read timeout, then deliver. The client will have
+            // cancelled the first read by then; the second read is what receives this write.
+            EffIO.liftF(IO.sleep(200.millis)) *> socket.write(payload)
+          )
         )
         .head
         .compile

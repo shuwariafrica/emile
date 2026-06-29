@@ -10,9 +10,9 @@ object EchoServer extends EmileIOApp.Simple:
   def runEff: EmIO[EmileError, Unit] =
     val addr = SocketAddress(ipv4"0.0.0.0", port"8080")
     Tcp.bind(addr, TcpOptions.server).widen[EmileError].use: server =>
-      server.connections
-        .parEvalMapUnordered(4096): socket =>
-          socket.reads.through(socket.writes).compile.drain
+      server.accepted
+        .parEvalMapUnordered(4096): connection =>
+          connection.use(socket => socket.reads.through(socket.writes).compile.drain)
         .compile.drain
 ```
 
@@ -71,12 +71,9 @@ import emile.*
 // Server: bind + listen completes synchronously inside resource acquisition; any failure
 // surfaces here, never later mid-stream.
 Tcp.bind(SocketAddress(ipv4"0.0.0.0", port"8080"), TcpOptions.server).use: server =>
-  // serial handling: each socket is closed when the next connection is pulled.
-  server.connections.evalMap(handle).compile.drain
-
-  // for unordered concurrency, use `accepted` - the socket's lifetime is the handler's `use` scope.
-  // (`connections.parEvalMapUnordered` is unsafe: it releases a socket before its handler finishes.)
-  server.accepted.parEvalMapUnordered(256)(_.use(handle)).compile.drain
+  // each accepted socket's lifetime is the handler's `use` scope - safe under every combinator.
+  server.accepted.evalMap(_.use(handle)).compile.drain                  // serial
+  server.accepted.parEvalMapUnordered(256)(_.use(handle)).compile.drain // unordered concurrency
 
 // Client: connect to an address ...
 Tcp.connect(SocketAddress(ipv4"127.0.0.1", port"8080")).use: socket =>

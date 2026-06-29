@@ -49,7 +49,7 @@ object Fs2Interop:
       * fs2's own server side yields - matches `ServerSocket.accept`.
       */
     def acceptFs2: Stream[IO, Fs2Socket[IO]] =
-      server.connections.translate(absolveIoK).map(_.asFs2)
+      server.accepted.translate(absolveIoK).flatMap(connection => Stream.resource(connection.mapK(absolveIoK)).map(_.asFs2))
 
   // Typed-error -> IO natural transformation; needed because Stream.translate takes a ~>, not absolve.
   private val absolveIoK: FunctionK[EffIO.Of[EmileError.Io], IO] =
