@@ -252,6 +252,13 @@ models the scope id as `Ipv6Address.scopeId`, but the round-trip narrows it to `
 need scope-bound link-local IPv6 today, supply the scope through the underlying interface configuration; a future emile
 release may carry it through explicitly.
 
+### musl support is best-effort
+
+emile's musl support is best-effort, pending upstream Scala Native runtime support for musl/Alpine that is still
+landing ([scala-native#4934](https://github.com/scala-native/scala-native/pull/4934)); treat a musl target as
+experimental until a Scala Native release carrying that work ships. Fully-static (`-static`) musl builds are the most
+affected - prefer dynamic linking on musl today. glibc targets are unaffected.
+
 ## Platform Dependencies
 
 | Component    | Required version                |

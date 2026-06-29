@@ -17,12 +17,17 @@ package emile
 
 import scala.concurrent.duration.*
 
+import boilerplate.effect.EffIO
+import cats.effect.IO
 import com.comcast.ip4s.*
 
-/** Guards the cancelable connect: a `timeout` bounds a connect to an unreachable peer instead of
-  * hanging on an uncancelable acquire.
+/** Guards the cancellation and cleanup paths on the TCP surface: a cancelable connect bounded by
+  * `timeout`, accept cancellation, and server release while a connection arrives.
   */
 final class CancellationCleanupSpec extends EmileSuite:
+
+  private val anyLoopback: SocketAddress[IpAddress] =
+    SocketAddress(Ipv4Address.fromString("127.0.0.1").get, Port.fromInt(0).get)
 
   test("a timeout bounds a connect to an unreachable address") {
     // 192.0.2.1 is RFC 5737 TEST-NET-1 (unroutable): a SYN to it draws no reply, so the connect blocks
@@ -32,3 +37,34 @@ final class CancellationCleanupSpec extends EmileSuite:
     val unreachable = SocketAddress(ipv4"192.0.2.1", port"9")
     Tcp.connect(unreachable).use_.timeout(3.seconds, EmileError.Connect.TimedOut).either.map(_.isLeft).assertEquals(true)
   }
+
+  test("cancelling a waiting accept leaves the listener able to accept") {
+    Tcp
+      .bind(anyLoopback)
+      .widen[EmileError]
+      .use { server =>
+        val acceptOne = server.acceptOne.use_.absolve
+        // Hold the connection so the server accepts before the client closes (a rapid close aborts the accept).
+        val connectHold =
+          Tcp.connect(server.address.asIpUnsafe).widen[EmileError].use(_ => EffIO.liftF(IO.sleep(150.millis))).absolve
+        EffIO.liftF(acceptOne.timeoutTo(300.millis, IO.unit).flatMap(_ => IO.both(acceptOne, connectHold).map(_ => ())))
+      }
+      .absolve
+      .timeout(5.seconds)
+  }
+
+  test("releasing a server while a connection arrives does not crash") {
+    // Release the server mid-connection (short window, repeated) to race a connection callback against the close.
+    def round: IO[Unit] =
+      Tcp
+        .bind(anyLoopback)
+        .widen[EmileError]
+        .use { server =>
+          val connect = Tcp.connect(server.address.asIpUnsafe).widen[EmileError].use_.absolve.attempt.map(_ => ())
+          EffIO.liftF(connect.timeoutTo(20.millis, IO.unit))
+        }
+        .absolve
+    round.replicateA_(50).timeout(60.seconds)
+  }
+
+end CancellationCleanupSpec
