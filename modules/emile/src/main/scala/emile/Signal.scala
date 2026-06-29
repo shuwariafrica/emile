@@ -19,14 +19,20 @@ import boilerplate.effect.EffIO
 
 import emile.unsafe.SignalSupervisor
 
-/** Subscriptions to POSIX process signals. A process-singleton supervisor installs one
-  * `uv_signal_t` per signal number the first time it is watched and broadcasts every delivery to
-  * every subscriber, so concurrent watches of the same signal never race.
+/** Subscriptions to POSIX process signals. A process-singleton supervisor installs a handler for a
+  * signal number the first time it is watched and broadcasts every delivery to every subscriber, so
+  * concurrent watches of the same signal never race; when the last subscriber for a signal leaves,
+  * the handler is removed and the signal's prior disposition restored.
   */
 @scala.annotation.internal.sharable
 object Signal:
 
-  /** A stream emitting `Unit` on each delivery of `signum` to the process. */
+  /** A stream emitting `Unit` on each delivery of `signum` to the process.
+    *
+    * The error type is `Nothing`: a watch yields no recoverable typed error. A failure to install
+    * the handler - no libuv runtime, an allocation failure, or an uncatchable signal - is a runtime
+    * defect on the cats-effect `Throwable` channel, never a value on this stream.
+    */
   def watch(signum: SignalNumber): EmStream[Nothing, Unit] =
     SignalSupervisor.subscribe(signum).translate(EffIO.liftK)
 

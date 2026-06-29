@@ -122,6 +122,8 @@ object EmileError:
   object Dns:
     final case class UnknownHost(host: String) extends EmileError(s"Unknown host: $host", None) with Dns
 
+    final case class TemporaryFailure(host: String) extends EmileError(s"Temporary name-resolution failure: $host", None) with Dns
+
     final case class System(code: ErrorCode) extends EmileError("", None) with Dns:
       override def getMessage: String = ErrorCode.describe(code)
 
@@ -141,7 +143,7 @@ object EmileError:
   object Runtime:
     case object MissingLibuvPollingSystem
         extends EmileError(
-          "LibuvPollingSystem is not installed in this IORuntime. Use EmileIOApp or Emile.runtime().",
+          "LibuvPollingSystem is not installed in this IORuntime. Use EmileIOApp or Emile.runtime.",
           None
         )
         with Runtime
@@ -197,4 +199,5 @@ private[emile] object IoMapping:
 private[emile] object DnsMapping:
   def fromCode(code: Int, host: String): EmileError.Dns = code match
     case ErrorCode.UV_EAI_NONAME | ErrorCode.UV_EAI_NODATA => EmileError.Dns.UnknownHost(host)
+    case ErrorCode.UV_EAI_AGAIN => EmileError.Dns.TemporaryFailure(host)
     case other => EmileError.Dns.System(ErrorCode(other))

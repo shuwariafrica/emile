@@ -18,6 +18,7 @@ package emile
 import cats.effect.ExitCode
 import cats.effect.IO
 import cats.effect.IOApp
+import cats.effect.Resource
 import cats.effect.unsafe.IORuntime
 import cats.effect.unsafe.IORuntimeBuilder
 import cats.effect.unsafe.PollingSystem
@@ -63,19 +64,23 @@ end EmileIOApp
   */
 object Emile:
 
-  /** An `IORuntime` on the libuv polling system with the default [[LoopConfig]]. The caller owns
-    * the runtime and must `shutdown` it.
+  /** A `Resource` yielding an `IORuntime` on the libuv polling system with the default
+    * [[LoopConfig]]; the runtime is shut down when the resource is released. Intended for code
+    * driving emile from a foreign entry point that owns the process lifecycle.
     */
-  def runtime: IORuntime = runtime(LoopConfig.default)
+  def runtime: Resource[IO, IORuntime] = runtime(LoopConfig.default)
 
-  /** An `IORuntime` on the libuv polling system tuned by `config`. The caller owns the runtime and
-    * must `shutdown` it.
+  /** A `Resource` yielding an `IORuntime` on the libuv polling system tuned by `config`; the
+    * runtime is shut down when the resource is released.
     */
-  def runtime(config: LoopConfig): IORuntime =
+  def runtime(config: LoopConfig): Resource[IO, IORuntime] =
+    Resource.make(IO.delay(unsafeRuntime(config)))(rt => IO.delay(rt.shutdown()))
+
+  /** Builds a libuv `IORuntime` whose shutdown the caller owns. The [[runtime]] resources and the
+    * synchronous [[runEff]] runners are layered on this.
+    */
+  private[emile] def unsafeRuntime(config: LoopConfig): IORuntime =
     IORuntimeBuilder().setPollingSystem(LibuvPollingSystem(config)).build()
-
-  /** Project a typed-error effect onto plain `IO`, its error carried on the `Throwable` channel. */
-  def runEffIO[A](eff: EmIO[EmileError, A]): IO[A] = eff.absolve
 
   /** Run a typed-error effect to its value on a fresh libuv `IORuntime` with the default
     * [[LoopConfig]], shutting the runtime down afterwards.
@@ -86,7 +91,7 @@ object Emile:
     * the runtime down afterwards.
     */
   def runEff[A](config: LoopConfig)(eff: EmIO[EmileError, A]): A =
-    val rt = runtime(config)
+    val rt = unsafeRuntime(config)
     try eff.absolve.unsafeRunSync()(using rt)
     finally rt.shutdown()
 

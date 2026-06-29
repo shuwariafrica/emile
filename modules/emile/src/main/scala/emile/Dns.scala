@@ -162,7 +162,11 @@ object Dns:
 
   private def startGetAddrInfo(poller: LibuvPoller, req: Ptr[Byte], node: String, service: String): Int =
     val hints = stdlib.calloc(1.toCSize, sizeof[netdb.addrinfo])
-    hints.asInstanceOf[Ptr[netdb.addrinfo]]._3 = socket.SOCK_STREAM
+    val ai = hints.asInstanceOf[Ptr[netdb.addrinfo]]
+    // AI_ADDRCONFIG: return a family's addresses only when the host has an interface configured for
+    // it, so an IPv4-only host is not handed AAAA records it cannot reach.
+    ai._1 = netdb.AI_ADDRCONFIG
+    ai._3 = socket.SOCK_STREAM
     val rc = Zone(LibUV.uv_getaddrinfo(poller.loop, req, gaiCb, toCString(node), toCString(service), hints))
     stdlib.free(hints)
     rc
@@ -170,7 +174,9 @@ object Dns:
   private def startGetNameInfo(poller: LibuvPoller, req: Ptr[Byte], addr: IpAddress): Int =
     val storage = stdlib.calloc(1.toCSize, SockAddr.storageSize.toCSize)
     SockAddr.write(SocketAddress(addr, Port.Wildcard), storage)
-    val rc = LibUV.uv_getnameinfo(poller.loop, req, niCb, storage, 0)
+    // NI_NAMEREQD: fail (EAI_NONAME) when the address has no reverse record, rather than returning
+    // its numeric text as though it were a host name.
+    val rc = LibUV.uv_getnameinfo(poller.loop, req, niCb, storage, netdb.NI_NAMEREQD)
     stdlib.free(storage)
     rc
 

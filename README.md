@@ -54,9 +54,12 @@ object MyApp extends EmileIOApp.Simple:
 object MyArgsApp extends EmileIOApp:
   def runEff(args: List[String]): EmIO[EmileError, ExitCode] = ???
 
-// Standalone runtime, for non-IOApp code (caller owns the runtime).
-val rt = Emile.runtime
-try myEff.absolve.unsafeRunSync()(using rt) finally rt.shutdown()
+// Standalone, for non-IOApp code: runs the effect on a fresh libuv runtime, then shuts it down.
+Emile.runEff(myEff)
+
+// For an embedder owning the process lifecycle, `Emile.runtime` yields the runtime as a
+// `Resource[IO, IORuntime]` (shut down on release).
+Emile.runtime.use(rt => program(rt))
 ```
 
 ### TCP

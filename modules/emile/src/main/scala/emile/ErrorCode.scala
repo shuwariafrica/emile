@@ -83,5 +83,6 @@ object ErrorCode:
   inline val UV_EOF = -4095
   inline val UV_EAI_NONAME = -3008
   inline val UV_EAI_NODATA = -3007
+  inline val UV_EAI_AGAIN = -3001
 
 end ErrorCode

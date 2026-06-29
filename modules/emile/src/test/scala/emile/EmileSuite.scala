@@ -33,6 +33,6 @@ object EmileSuite:
     * test binary exits.
     */
   lazy val SharedRuntime: IORuntime =
-    val rt = Emile.runtime
+    val rt = Emile.unsafeRuntime(LoopConfig.default)
     java.lang.Runtime.getRuntime.addShutdownHook(new Thread(() => rt.shutdown(), "emile-test-shutdown"))
     rt

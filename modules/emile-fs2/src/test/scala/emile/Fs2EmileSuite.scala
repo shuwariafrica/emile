@@ -21,7 +21,7 @@ import munit.CatsEffectSuite
 
 /** Base suite for emile-fs2's cats-effect tests: every test runs on one shared libuv-backed
   * `IORuntime`. The emile-fs2 module does not depend on the `emile` test classpath, so the
-  * `EmileSuite` pattern is duplicated here over the same `Emile.runtime` factory.
+  * `EmileSuite` pattern is duplicated here over the same `Emile.unsafeRuntime` factory.
   */
 abstract class Fs2EmileSuite extends CatsEffectSuite:
   implicit override lazy val munitIORuntime: IORuntime = Fs2EmileSuite.SharedRuntime
@@ -34,6 +34,6 @@ object Fs2EmileSuite:
     * the test binary exits.
     */
   lazy val SharedRuntime: IORuntime =
-    val rt = Emile.runtime
+    val rt = Emile.unsafeRuntime(LoopConfig.default)
     java.lang.Runtime.getRuntime.addShutdownHook(new Thread(() => rt.shutdown(), "emile-fs2-test-shutdown"))
     rt

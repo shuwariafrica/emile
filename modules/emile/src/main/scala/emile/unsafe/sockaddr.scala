@@ -17,6 +17,9 @@ package emile.unsafe
 
 import scala.scalanative.posix.arpa.inet.htons
 import scala.scalanative.posix.arpa.inet.ntohs
+import scala.scalanative.posix.net.`if`.IF_NAMESIZE
+import scala.scalanative.posix.net.`if`.if_indextoname
+import scala.scalanative.posix.net.`if`.if_nametoindex
 import scala.scalanative.posix.netinet.in.sockaddr_in
 import scala.scalanative.posix.netinet.in.sockaddr_in6
 import scala.scalanative.posix.sys.socket.AF_INET
@@ -40,7 +43,8 @@ private[emile] object SockAddr:
   val storageSize: Int = sizeof[sockaddr_storage].toInt
 
   /** Writes `address` into `storage` as a `sockaddr_in` or `sockaddr_in6`. `storage` must be at
-    * least [[storageSize]] bytes and zeroed; the IPv6 scope id is not carried.
+    * least [[storageSize]] bytes and zeroed; an IPv6 zone id is carried as the numeric interface
+    * index in `sin6_scope_id`.
     */
   def write(address: SocketAddress[IpAddress], storage: Ptr[Byte]): Unit =
     val port = htons(address.port.value.toUShort)
@@ -63,7 +67,8 @@ private[emile] object SockAddr:
       val sa = storage.asInstanceOf[Ptr[sockaddr_in6]]
       val bytes = new Array[Byte](16)
       copyFromPtr(sa.at4.asInstanceOf[Ptr[Byte]], bytes)
-      addressOf(Ipv6Address.fromBytes(bytes), ntohs(sa._2))
+      val v6 = Ipv6Address.fromBytes(bytes).map(a => scopeName(sa._5).fold(a)(a.withScopeId))
+      addressOf(v6, ntohs(sa._2))
     else None
 
   private def writeV4(v4: Ipv4Address, storage: Ptr[Byte], port: CUnsignedShort): Unit =
@@ -77,6 +82,24 @@ private[emile] object SockAddr:
     sa._1 = AF_INET6.toUShort
     sa._2 = port
     copyToPtr(v6.toBytes, sa.at4.asInstanceOf[Ptr[Byte]])
+    sa._5 = scopeIndex(v6.scopeId)
+
+  // ip4s carries an IPv6 zone as an interface-name string; the C socket carries it as the numeric
+  // interface index in sin6_scope_id (host byte order). A name with no current interface falls back
+  // to its numeric form, so a zone is never silently lost on round-trip.
+
+  private def scopeIndex(scopeId: Option[String]): CUnsignedInt =
+    scopeId.fold(0.toUInt) { name =>
+      val index = Zone(if_nametoindex(toCString(name)))
+      if index.toLong != 0L then index else name.toIntOption.fold(0.toUInt)(_.toUInt)
+    }
+
+  private def scopeName(index: CUnsignedInt): Option[String] =
+    if index.toLong == 0L then None
+    else
+      val buf = stackalloc[Byte](IF_NAMESIZE)
+      val name = if_indextoname(index, buf)
+      if name != null then Some(fromCString(name)) else Some(index.toString)
 
   // scalafix:on DisableSyntax
 

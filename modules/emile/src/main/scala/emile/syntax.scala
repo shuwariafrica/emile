@@ -26,6 +26,16 @@ import fs2.Stream
   */
 type EmIO[+E, +A] = EffIO[E, A]
 
+/** Companion namespace for the [[EmIO]] effect alias; holds its higher-kinded partial application
+  * [[EmIO.Of]].
+  */
+object EmIO:
+
+  /** The effect constructor with its error fixed to `E`, `[A] =>> EmIO[E, A]`, for the
+    * type-constructor positions of `Stream`, `Resource`, and `Pipe`. Mirrors `EffIO.Of`.
+    */
+  type Of[E] = EffIO.Of[E]
+
 /** An fs2 `Stream` scoped over the [[EmIO]] effect; covariant in the error `E`. */
 type EmStream[+E, +A] = Stream[EffIO.Of[E], A]
 
@@ -44,3 +54,19 @@ type EmPipe[E, -I, +O] = Pipe[EffIO.Of[E], I, O]
   * implicit widening that the covariant [[EmIO]] and [[EmStream]] get for free.
   */
 extension [E, A](resource: EmResource[E, A]) def widen[E2 >: E]: EmResource[E2, A] = resource.mapK(EffIO.widenK[E, E2])
+
+/** Widens an [[EmStream]]'s error channel to a supertype without a cast. [[EmStream]] also widens
+  * implicitly through covariance; this is the explicit, inference-friendly spelling, paralleling
+  * the `widen` on [[EmResource]].
+  */
+extension [E, A](stream: EmStream[E, A]) def widenS[E2 >: E]: EmStream[E2, A] = stream.translate(EffIO.widenK[E, E2])
+
+/** Widens an [[EmPipe]]'s error channel to a supertype. `Pipe` is invariant in its effect (the
+  * effect occupies a function-input position), so it cannot widen structurally as [[EmIO]] and
+  * [[EmStream]] do; widening the resulting stream with `widenS` is the cast-free alternative.
+  */
+extension [E, I, O](pipe: EmPipe[E, I, O])
+  def widen[E2 >: E]: EmPipe[E2, I, O] =
+    // EmIO's error is a phantom (erased at runtime), so reinterpreting the invariant Pipe at a wider
+    // error is a runtime identity, not a structural transform, exactly as EffIO.assumeError does.
+    pipe.asInstanceOf[EmPipe[E2, I, O]] // scalafix:ok DisableSyntax.asInstanceOf
