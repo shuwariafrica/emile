@@ -28,8 +28,8 @@ import com.comcast.ip4s.Ipv4Address
 import com.comcast.ip4s.Port
 import com.comcast.ip4s.SocketAddress
 
-/** Covers [[TcpSocket.sendFile]] over `uv_fs_sendfile`: a server streams a temp file to the peer
-  * via the kernel and the client receives the content.
+/** Covers [[Socket.sendFile]] over `uv_fs_sendfile`: a server streams a temp file to the peer via
+  * the kernel and the client receives the content.
   */
 final class TcpSendFileSpec extends EmileSuite:
 

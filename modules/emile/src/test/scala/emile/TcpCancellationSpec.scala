@@ -25,8 +25,8 @@ import com.comcast.ip4s.Ipv4Address
 import com.comcast.ip4s.Port
 import com.comcast.ip4s.SocketAddress
 
-/** Covers the cancellation finaliser on [[TcpSocket.read]]: a read whose `IO.async` is cancelled
-  * must clear the libuv `uv_read_start` state so a subsequent read does not hit `UV_EALREADY`.
+/** Covers the cancellation finaliser on [[Socket.read]]: a read whose `IO.async` is cancelled must
+  * clear the libuv `uv_read_start` state so a subsequent read does not hit `UV_EALREADY`.
   */
 final class TcpCancellationSpec extends EmileSuite:
 

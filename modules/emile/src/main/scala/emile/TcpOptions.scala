@@ -54,8 +54,9 @@ object TcpOptions:
   /** Defaults plus `TCP_NODELAY` - the low-latency profile. */
   val lowLatency: TcpOptions = default.copy(noDelay = true)
 
-  /** Defaults plus `SO_REUSEPORT` and a 60-second keep-alive - the server profile. */
+  /** Defaults plus `TCP_NODELAY`, `SO_REUSEPORT`, and a 60-second keep-alive - the server profile. */
   val server: TcpOptions = default.copy(
+    noDelay = true,
     reusePort = true,
     keepAlive = Some(TcpKeepAlive.simple(60.seconds))
   )

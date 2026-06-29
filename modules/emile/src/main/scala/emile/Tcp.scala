@@ -59,7 +59,7 @@ object Tcp:
     */
   def connect(address: SocketAddress[IpAddress], options: TcpOptions): EmResource[EmileError.Connect, TcpSocket] =
     Resource
-      .makeFull[EffIO.Of[EmileError.Connect], TcpSocket](poll => poll(connectRaw(address)))(socket => EffIO.liftF(TcpSocket.release(socket)))
+      .makeFull[EffIO.Of[EmileError.Connect], TcpSocket](poll => poll(connectRaw(address)))(socket => EffIO.liftF(Socket.release(socket)))
       .evalTap(applyPostConnect(_, options))
 
   /** Connect by hostname with the default [[TcpOptions]]. */
@@ -74,7 +74,7 @@ object Tcp:
   def connect(host: Host, port: Port, options: TcpOptions): EmResource[EmileError.HostConnect, TcpSocket] =
     Resource
       .makeFull[EffIO.Of[EmileError.HostConnect], TcpSocket](poll => poll(hostConnectAcquire(host, port)))(socket =>
-        EffIO.liftF(TcpSocket.release(socket))
+        EffIO.liftF(Socket.release(socket))
       )
       .evalTap(applyPostConnect(_, options))
 
@@ -130,7 +130,7 @@ object Tcp:
       LibUV.uv_close(handle, freeHandleCb)
       Left(BindMapping.fromCode(bindRc))
     else
-      TcpSocket.localAddressOf(handle) match
+      Socket.localAddressOf(handle) match
         case Left(rc) =>
           LibUV.uv_close(handle, freeHandleCb)
           Left(
@@ -141,7 +141,7 @@ object Tcp:
           // TcpServer.construct stores the server in the handle's `data` slot - which the
           // connection_cb later recovers - so it has to happen before uv_listen activates and
           // a connection_cb could fire on an unstored handle.
-          val server = TcpServer.construct(handle, poller, local, queue)
+          val server = TcpServer.construct(handle, poller, local, options, queue)
           val listenRc = LibUV.uv_listen(handle, options.listenBacklog, TcpServer.connectionCb)
           if listenRc != 0 then
             // construct anchored the server in the data slot; clear it before uv_close or it leaks.
@@ -231,17 +231,17 @@ object Tcp:
         LibUV.uv_close(handle, freeHandleCb)
         cb(Left(ConnectMapping.fromCode(status)))
       else
-        TcpSocket.localAddressOf(handle) match
+        Socket.localAddressOf(handle) match
           case Left(rc) =>
             LibUV.uv_close(handle, freeHandleCb)
             cb(Left(toConnectError(rc)))
           case Right(local) =>
-            TcpSocket.peerAddressOf(handle) match
+            Socket.peerAddressOf(handle) match
               case Left(rc) =>
                 LibUV.uv_close(handle, freeHandleCb)
                 cb(Left(toConnectError(rc)))
               case Right(peer) =>
-                cb(Right(TcpSocket.construct(handle, poller, local, peer)))
+                cb(Right(Socket.construct(handle, poller, local, peer)))
       end if
 
   private val connectCb: LibUV.ConnectCB = (req: Ptr[Byte], status: CInt) =>
@@ -252,14 +252,7 @@ object Tcp:
     else ConnectMapping.fromCode(rc)
 
   private def applyPostConnect(socket: TcpSocket, options: TcpOptions): EmIO[EmileError.Connect, Unit] =
-    val noDelayStep =
-      if options.noDelay then socket.setNoDelay(true).mapError(ioToConnect) else EffIO.succeed(())
-    val keepAliveStep = options.keepAlive match
-      case None => EffIO.succeed(())
-      case Some(ka) => socket.setKeepAlive(Some(ka)).mapError(ioToConnect)
-    noDelayStep.flatMap(_ => keepAliveStep)
-
-  private def ioToConnect(error: EmileError.Io): EmileError.Connect = EmileError.Connect.Unexpected(error)
+    Socket.applyOptions(socket, options).mapError(EmileError.Connect.Unexpected(_))
 
   private def hostConnectAcquire(host: Host, port: Port): EmIO[EmileError.HostConnect, TcpSocket] =
     Dns.resolve(host, port).flatMap(addresses => tryAddresses(addresses.toList, Nil))

@@ -145,6 +145,7 @@ private[unsafe] object LibUVExtern:
     writeCb: LibUV.WriteCB
   ): CInt = extern
   def uv_shutdown(req: Ptr[Byte], handle: Ptr[Byte], shutdownCb: LibUV.ShutdownCB): CInt = extern
+  def uv_try_write(handle: Ptr[Byte], bufs: Ptr[LibUV.Buf], nbufs: CUnsignedInt): CInt = extern
 
   def uv_tcp_init(loop: Ptr[Byte], handle: Ptr[Byte]): CInt = extern
   def uv_tcp_bind(handle: Ptr[Byte], addr: Ptr[Byte], flags: CUnsignedInt): CInt = extern

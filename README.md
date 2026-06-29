@@ -69,9 +69,14 @@ import com.comcast.ip4s.*
 import emile.*
 
 // Server: bind + listen completes synchronously inside resource acquisition; any failure
-// surfaces here, never later mid-stream on `connections`.
+// surfaces here, never later mid-stream.
 Tcp.bind(SocketAddress(ipv4"0.0.0.0", port"8080"), TcpOptions.server).use: server =>
+  // serial handling: each socket is closed when the next connection is pulled.
   server.connections.evalMap(handle).compile.drain
+
+  // for unordered concurrency, use `accepted` - the socket's lifetime is the handler's `use` scope.
+  // (`connections.parEvalMapUnordered` is unsafe: it releases a socket before its handler finishes.)
+  server.accepted.parEvalMapUnordered(256)(_.use(handle)).compile.drain
 
 // Client: connect to an address ...
 Tcp.connect(SocketAddress(ipv4"127.0.0.1", port"8080")).use: socket =>

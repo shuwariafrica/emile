@@ -35,6 +35,7 @@ final private[emile] class TcpServerState(
   val handle: Ptr[Byte],
   val poller: LibuvPoller,
   val address: GenSocketAddress,
+  val options: TcpOptions,
   val connections: UnboundedQueue[IO, Either[EmileError.Io, Unit]]
 )
 
@@ -54,20 +55,31 @@ object TcpServer:
     def address: GenSocketAddress = server.address
 
     /** Stream of accepted connections. Each emitted [[TcpSocket]] is implicitly resource-scoped:
-      * the underlying socket is closed when the consumer's per-element scope ends. Pull-style
-      * accept - libuv stops the listener watcher between `uv_connection_cb` and the next
-      * `uv_accept`, so kernel backlog absorbs all slack between arrivals and pulls.
+      * the socket is closed when the consumer's per-element scope ends. Safe for serial handling
+      * and for `map(s => Stream.eval(handle(s))).parJoin(n)`, but NOT for `parEvalMapUnordered` -
+      * that releases a socket before its handler finishes; use [[accepted]] for unordered
+      * concurrency. Pull-style accept - libuv stops the listener watcher between `uv_connection_cb`
+      * and the next `uv_accept`, so kernel backlog absorbs all slack between arrivals and pulls.
       */
     def connections: EmStream[EmileError.Io, TcpSocket] =
       Stream.resource(server.acceptOne).repeat
 
+    /** Stream of accept tokens, each a resource that accepts one connection when used. The socket's
+      * lifetime is the handler's `use` scope, so this is safe under every concurrency combinator:
+      * `server.accepted.parEvalMapUnordered(n)(_.use(handle))`.
+      */
+    def accepted: EmStream[EmileError.Io, EmResource[EmileError.Io, TcpSocket]] =
+      Stream.emit(server.acceptOne).covary[EmIO.Of[EmileError.Io]].repeat
+
     /** A single accepted connection as a scoped resource - the socket closes when the resource's
-      * scope ends.
+      * scope ends. The per-socket [[TcpOptions]] tuning is applied before the socket is yielded.
       */
     def acceptOne: EmResource[EmileError.Io, TcpSocket] =
       // makeFull keeps the accept wait cancelable: Resource.make's acquire is uncancelable, which would
       // mask acceptNext's poll(take) and hang a cancelled idle accept (e.g. a graceful shutdown).
-      Resource.makeFull[EffIO.Of[EmileError.Io], TcpSocket](poll => poll(acceptNext(server)))(socket => EffIO.liftF(TcpSocket.release(socket)))
+      Resource
+        .makeFull[EffIO.Of[EmileError.Io], TcpSocket](poll => poll(acceptNext(server)))(socket => EffIO.liftF(Socket.release(socket)))
+        .evalTap(socket => Socket.applyOptions(socket, server.options))
 
   end extension
 
@@ -78,9 +90,10 @@ object TcpServer:
     handle: Ptr[Byte],
     poller: LibuvPoller,
     address: GenSocketAddress,
+    options: TcpOptions,
     queue: UnboundedQueue[IO, Either[EmileError.Io, Unit]]
   ): TcpServer =
-    val state = new TcpServerState(handle, poller, address, queue)
+    val state = new TcpServerState(handle, poller, address, options, queue)
     CallbackBridge.store(poller, handle, state)
     state
 
@@ -134,14 +147,14 @@ object TcpServer:
             LibUV.uv_close(client, freeHandleCb)
             Left(error)
           case Right((local, peer)) =>
-            Right(TcpSocket.construct(client, server.poller, local, peer))
+            Right(Socket.construct(client, server.poller, local, peer))
     end if
   end performAccept
 
   private def captureAddresses(handle: Ptr[Byte]): Either[EmileError.Io, (GenSocketAddress, GenSocketAddress)] =
     for
-      local <- TcpSocket.localAddressOf(handle).left.map(toIoError)
-      peer <- TcpSocket.peerAddressOf(handle).left.map(toIoError)
+      local <- Socket.localAddressOf(handle).left.map(toIoError)
+      peer <- Socket.peerAddressOf(handle).left.map(toIoError)
     yield (local, peer)
 
   private def toIoError(rc: Int): EmileError.Io =

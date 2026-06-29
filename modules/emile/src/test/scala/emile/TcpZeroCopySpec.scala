@@ -25,7 +25,9 @@ import com.comcast.ip4s.Ipv4Address
 import com.comcast.ip4s.Port
 import com.comcast.ip4s.SocketAddress
 
-/** Covers [[TcpSocket.readPtr]] / [[TcpSocket.writePtr]] - the zero-copy one-shot read/write pair. */
+/** Covers [[Socket.readPtr]] / [[Socket.writePtr]] / [[Socket.tryWritePtr]] - the zero-copy read
+  * and write surface.
+  */
 final class TcpZeroCopySpec extends EmileSuite:
 
   private val anyLoopback: SocketAddress[IpAddress] =
@@ -37,6 +39,16 @@ final class TcpZeroCopySpec extends EmileSuite:
       .bind(anyLoopback)
       .widen[EmileError]
       .use(server => EffIO.liftF(zeroCopyEcho(server, payload)))
+      .absolve
+      .timeout(5.seconds)
+  }
+
+  test("tryWritePtr synchronously writes a small payload and reports its byte count") {
+    val payload: Chunk[Byte] = Chunk.array("try-write".getBytes("UTF-8"))
+    Tcp
+      .bind(anyLoopback)
+      .widen[EmileError]
+      .use(server => EffIO.liftF(tryWriteEcho(server, payload)))
       .absolve
       .timeout(5.seconds)
   }
@@ -71,5 +83,38 @@ final class TcpZeroCopySpec extends EmileSuite:
 
     srvWork.background.use(_ => cliWork)
   end zeroCopyEcho
+
+  // The server reads one chunk zero-copy, then echoes it with tryWritePtr; a small loopback payload
+  // fits the send buffer, so the synchronous write reports the whole chunk.
+  private def tryWriteEcho(server: TcpServer, payload: Chunk[Byte]): IO[Unit] =
+    val srvWork: IO[Unit] =
+      server.connections
+        .evalMap(socket =>
+          socket
+            .readPtr((ptr, len) => socket.tryWritePtr(ptr, len).map(written => assertEquals(written, len)))
+            .map(_ => ())
+        )
+        .head
+        .compile
+        .drain
+        .absolve
+
+    val cliWork: IO[Unit] =
+      Tcp
+        .connect(server.address.asIpUnsafe)
+        .widen[EmileError]
+        .use(socket =>
+          EffIO.liftF(
+            for
+              _ <- socket.write(payload).absolve
+              echo <- socket.read(payload.size).absolve
+              _ <- IO(assertEquals(echo.fold(List.empty[Byte])(_.toList), payload.toList))
+            yield ()
+          )
+        )
+        .absolve
+
+    srvWork.background.use(_ => cliWork)
+  end tryWriteEcho
 
 end TcpZeroCopySpec
