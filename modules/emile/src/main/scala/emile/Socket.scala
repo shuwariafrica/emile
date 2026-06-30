@@ -45,7 +45,15 @@ final private class StreamSocketState(
   val address: Matchable,
   val peerAddress: Matchable,
   val readBuffer: ResizableBuffer
-)
+):
+  // Mutual exclusion of a raw-fd sendFile with queued writes and a half-close. sendFile bypasses libuv's
+  // write queue (and the FIN ordering uv_shutdown derives from it), so an overlap interleaves on the wire
+  // or, against a half-close, sends FIN past the in-flight sendFile and truncates. Owner-confined - every
+  // write / sendFile / shutdown submit and completion runs on the loop thread - so these need no barrier.
+  // outputShutdown is terminal: once endOfOutput's uv_shutdown is submitted the write side is closed.
+  var pendingWrites: Int = 0 // scalafix:ok DisableSyntax.var
+  var sendFileActive: Boolean = false // scalafix:ok DisableSyntax.var
+  var outputShutdown: Boolean = false // scalafix:ok DisableSyntax.var
 
 /** The kind of a connected stream socket - the phantom tag that distinguishes a TCP socket from an
   * [[Ipc$ Ipc]] (Unix-domain / named-pipe) one at the type level while they share one byte-stream
@@ -149,7 +157,10 @@ object Socket:
     def writes: EmPipe[EmileError.Io, Byte, Nothing] =
       _.chunks.foreach(chunk => socket.write(chunk))
 
-    /** Half-close the write side via `uv_shutdown`. Pending writes drain to the kernel first. */
+    /** Half-close the write side via `uv_shutdown`; pending writes drain to the kernel first. Fails
+      * with [[EmileError.Io.ConflictingTransfer]] if a raw-fd [[sendFile]] is in flight, whose
+      * bytes the FIN would otherwise truncate.
+      */
     def endOfOutput: EmIO[EmileError.Io, Unit] =
       EffIO.attempt(shutdownWrite(socket), EmileError.Io.Unexpected(_))
 
@@ -203,7 +214,13 @@ object Socket:
     inline def tryWritePtr(buf: Ptr[Byte], len: Int): EmIO[EmileError.Io, Int] =
       tryWrite(socket, buf, len)
 
-    /** Zero-copy kernel-to-socket via `uv_fs_sendfile`. */
+    /** Zero-copy kernel-to-socket via `uv_fs_sendfile` - one best-effort syscall, returning the
+      * bytes actually sent, which may be fewer than `length` (0 when the socket send buffer is
+      * full). It bypasses libuv's write queue, so a concurrent [[write]] or [[endOfOutput]] on the
+      * same socket fails fast with [[EmileError.Io.ConflictingTransfer]] rather than interleaving
+      * on the wire or truncating at the half-close (sequential `write` then `sendFile` is fine).
+      * For a backpressured whole-file transfer use `file.reads.through(socket.writes)`.
+      */
     @targetName("ext_sendFile")
     inline def sendFile(file: OpenFile, offset: Long, length: Long): EmIO[EmileError.Io, Long] =
       sendFileFromOpen(socket, file, offset, length)
@@ -232,6 +249,7 @@ object Socket:
     inline def setNoDelay(enabled: Boolean): EmIO[EmileError.Io, Unit] =
       noDelay(socket, enabled)
 
+    /** Configure keep-alive probing; `None` disables it. */
     @targetName("ext_setKeepAlive")
     inline def setKeepAlive(keepAlive: Option[TcpKeepAlive]): EmIO[EmileError.Io, Unit] =
       keepAliveOn(socket, keepAlive)
@@ -559,6 +577,7 @@ object Socket:
   // Keeps the chunk reachable across the in-flight uv_write, and carries the poller the writeCb
   // trampoline needs to release the request's anchor.
   final private class WriteState(
+    val socket: StreamSocketState,
     val poller: LibuvPoller,
     val cb: Either[Throwable, Unit] => Unit,
     @scala.annotation.unused val keepAlive: AnyRef
@@ -607,22 +626,26 @@ object Socket:
     cb: Either[Throwable, Unit] => Unit,
     keepAlive: AnyRef
   ): Unit =
-    val req = allocWriteReq()
-    val bufs = stackalloc[LibUV.Buf]()
-    bufs._1 = base
-    bufs._2 = length.toCSize
-    CallbackBridge.storeReq(poller(socket), req, new WriteState(poller(socket), cb, keepAlive))
-    val rc = LibUV.uv_write(req, handle, bufs, 1.toUInt, writeCb)
-    if rc < 0 then
-      CallbackBridge.releaseReq(poller(socket), req)
-      stdlib.free(req)
-      cb(Left(IoMapping.fromCode(rc)))
+    if socket.sendFileActive then cb(Left(EmileError.Io.ConflictingTransfer))
+    else
+      val req = allocWriteReq()
+      val bufs = stackalloc[LibUV.Buf]()
+      bufs._1 = base
+      bufs._2 = length.toCSize
+      CallbackBridge.storeReq(poller(socket), req, new WriteState(socket, poller(socket), cb, keepAlive))
+      val rc = LibUV.uv_write(req, handle, bufs, 1.toUInt, writeCb)
+      if rc < 0 then
+        CallbackBridge.releaseReq(poller(socket), req)
+        stdlib.free(req)
+        cb(Left(IoMapping.fromCode(rc)))
+      else socket.pendingWrites += 1
   end submitWrite
 
   private val writeCb: LibUV.WriteCB = (req: Ptr[Byte], status: CInt) =>
     val state = CallbackBridge.loadReq[WriteState](req)
     CallbackBridge.releaseReq(state.poller, req)
     stdlib.free(req)
+    state.socket.pendingWrites -= 1
     if status < 0 then state.cb(Left(IoMapping.fromCode(status)))
     else state.cb(Right(()))
 
@@ -630,7 +653,8 @@ object Socket:
     EffIO.lift(
       Routing.onOwner(poller(socket)):
         LiveHandle.tryUse[Either[EmileError.Io, Int]](socket.live, Left(EmileError.Io.AlreadyClosed)): handle =>
-          if len <= 0 then Right(0)
+          if socket.sendFileActive then Left(EmileError.Io.ConflictingTransfer)
+          else if len <= 0 then Right(0)
           else
             val bufs = stackalloc[LibUV.Buf]()
             bufs._1 = buf
@@ -652,43 +676,60 @@ object Socket:
       IO.async[Long] { cb =>
         Routing.onOwner(poller(socket)):
           LiveHandle.tryUse(socket.live, closedAsync(cb)): handle =>
-            val fdCell = stackalloc[CInt]()
-            val rc1 = LibUV.uv_fileno(handle, fdCell)
-            if rc1 < 0 then
-              cb(Left(IoMapping.fromCode(rc1)))
+            // A queued write, another sendFile in flight, or a half-closed write side would interleave
+            // with or truncate this raw-fd write (it bypasses libuv's write queue and FIN ordering).
+            if socket.pendingWrites > 0 || socket.sendFileActive || socket.outputShutdown then
+              cb(Left(EmileError.Io.ConflictingTransfer))
               None
-            else
-              val req = allocFsReq()
-              val rc2 = LibUV.uv_fs_sendfile(
-                poller(socket).loop,
-                req,
-                !fdCell,
-                OpenFile.descriptor(file),
-                offset,
-                length.toCSize,
-                fsCb
-              )
-              if rc2 < 0 then
-                cleanupFsReq(req)
-                cb(Left(IoMapping.fromCode(rc2)))
-                None
-              else
-                CallbackBridge.storeReq(poller(socket), req, sendFileDeliver(poller(socket), cb))
-                // Cancellation cancels the queued sendfile; its callback fires UV_ECANCELED, which
-                // sendFileDeliver maps to an error and frees the request.
-                Some(Routing.onOwner(poller(socket))(LibUV.uv_cancel(req): Unit))
-            end if
+            else startSendFile(socket, handle, file, offset, length, cb)
       },
       EmileError.Io.Unexpected(_)
     )
 
-  private def sendFileDeliver(poller: LibuvPoller, cb: Either[Throwable, Long] => Unit): Ptr[Byte] => Unit =
+  private def startSendFile(
+    socket: StreamSocketState,
+    handle: Ptr[Byte],
+    file: OpenFile,
+    offset: Long,
+    length: Long,
+    cb: Either[Throwable, Long] => Unit
+  ): Option[IO[Unit]] =
+    val fdCell = stackalloc[CInt]()
+    val rc1 = LibUV.uv_fileno(handle, fdCell)
+    if rc1 < 0 then
+      cb(Left(IoMapping.fromCode(rc1)))
+      None
+    else
+      val req = allocFsReq()
+      val rc2 = LibUV.uv_fs_sendfile(poller(socket).loop, req, !fdCell, OpenFile.descriptor(file), offset, length.toCSize, fsCb)
+      if rc2 < 0 then
+        cleanupFsReq(req)
+        cb(Left(IoMapping.fromCode(rc2)))
+        None
+      else
+        socket.sendFileActive = true
+        CallbackBridge.storeReq(poller(socket), req, sendFileDeliver(poller(socket), socket, cb))
+        // Cancellation cancels the queued sendfile; its callback fires UV_ECANCELED, which
+        // sendFileDeliver maps to an error and frees the request (clearing sendFileActive).
+        Some(Routing.onOwner(poller(socket))(LibUV.uv_cancel(req): Unit))
+    end if
+  end startSendFile
+
+  private def sendFileDeliver(
+    poller: LibuvPoller,
+    socket: StreamSocketState,
+    cb: Either[Throwable, Long] => Unit
+  ): Ptr[Byte] => Unit =
     req =>
       val result = LibUV.uv_fs_get_result(req).toLong
+      socket.sendFileActive = false
       CallbackBridge.releaseReq(poller, req)
       cleanupFsReq(req)
-      if result < 0L then cb(Left(IoMapping.fromCode(result.toInt)))
-      else cb(Right(result))
+      // A full send buffer surfaces as UV_EAGAIN; report it as 0 bytes sent (as tryWritePtr does),
+      // matching the best-effort "bytes actually sent" contract.
+      if result >= 0L then cb(Right(result))
+      else if result.toInt == ErrorCode.UV_EAGAIN then cb(Right(0L))
+      else cb(Left(IoMapping.fromCode(result.toInt)))
 
   private val fsCb: LibUV.FsCB = (req: Ptr[Byte]) => CallbackBridge.loadReq[Ptr[Byte] => Unit](req).apply(req)
 
@@ -721,12 +762,18 @@ object Socket:
     IO.async[Unit]: cb =>
       Routing.onOwner(poller(socket)):
         LiveHandle.tryUse(socket.live, closedAsync(cb)): handle =>
-          val req = allocShutdownReq()
-          val rc = LibUV.uv_shutdown(req, handle, shutdownCb)
-          if rc < 0 then
-            stdlib.free(req)
-            cb(Left(IoMapping.fromCode(rc)))
-          else CallbackBridge.storeReq(poller(socket), req, shutdownDeliver(poller(socket), cb))
+          // A raw-fd sendFile is in flight outside libuv's write queue; uv_shutdown would send FIN past
+          // it and truncate the stream. Fail fast rather than corrupt the transfer.
+          if socket.sendFileActive then cb(Left(EmileError.Io.ConflictingTransfer))
+          else
+            val req = allocShutdownReq()
+            val rc = LibUV.uv_shutdown(req, handle, shutdownCb)
+            if rc < 0 then
+              stdlib.free(req)
+              cb(Left(IoMapping.fromCode(rc)))
+            else
+              socket.outputShutdown = true
+              CallbackBridge.storeReq(poller(socket), req, shutdownDeliver(poller(socket), cb))
           None
 
   private def shutdownDeliver(poller: LibuvPoller, cb: Either[Throwable, Unit] => Unit): (Int, Ptr[Byte]) => Unit =

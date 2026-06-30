@@ -23,13 +23,14 @@ import scala.concurrent.duration.*
 import boilerplate.effect.EffIO
 import cats.effect.IO
 import cats.effect.Resource
+import fs2.Chunk
 import com.comcast.ip4s.IpAddress
 import com.comcast.ip4s.Ipv4Address
 import com.comcast.ip4s.Port
 import com.comcast.ip4s.SocketAddress
 
-/** Covers [[Socket.sendFile]] over `uv_fs_sendfile`: a server streams a temp file to the peer via
-  * the kernel and the client receives the content.
+/** Covers a server streaming a temp file to the peer two ways: [[Socket.sendFile]] (kernel
+  * `uv_fs_sendfile`) and the backpressure-correct `OpenFile.reads.through(socket.writes)`.
   */
 final class TcpSendFileSpec extends EmileSuite:
 
@@ -43,6 +44,17 @@ final class TcpSendFileSpec extends EmileSuite:
         .bind(anyLoopback)
         .widen[EmileError]
         .use(server => EffIO.liftF(sendFileRoundTrip(server, content)))
+        .absolve
+    program.timeout(5.seconds)
+  }
+
+  test("OpenFile.reads through a socket's writes streams the file body to the peer") {
+    val content: Array[Byte] = "emile reads-through-writes whole-body probe payload".getBytes("UTF-8")
+    val program: IO[Unit] =
+      Tcp
+        .bind(anyLoopback)
+        .widen[EmileError]
+        .use(server => EffIO.liftF(readsThroughRoundTrip(server, content)))
         .absolve
     program.timeout(5.seconds)
   }
@@ -80,6 +92,132 @@ final class TcpSendFileSpec extends EmileSuite:
 
     srvWork.background.use(_ => cliWork)
   end sendFileEcho
+
+  private def readsThroughRoundTrip(server: TcpServer, content: Array[Byte]): IO[Unit] =
+    tempFile(content).use(path => readsThroughEcho(server, path, content))
+
+  private def readsThroughEcho(server: TcpServer, path: Path, content: Array[Byte]): IO[Unit] =
+    val srvWork: IO[Unit] =
+      OpenFile
+        .open(path)
+        .widen[EmileError]
+        .use(file =>
+          server.accepted
+            .evalMap(_.use(socket => file.reads.through(socket.writes).compile.drain.flatMap(_ => socket.endOfOutput)))
+            .head
+            .compile
+            .drain
+        )
+        .absolve
+
+    val cliWork: IO[Unit] =
+      Tcp
+        .connect(server.address)
+        .widen[EmileError]
+        .use(socket =>
+          EffIO.liftF(
+            for
+              echo <- socket.reads.compile.to(Chunk).absolve
+              _ <- IO(assertEquals(echo.toList, content.toList))
+            yield ()
+          )
+        )
+        .absolve
+
+    srvWork.background.use(_ => cliWork)
+  end readsThroughEcho
+
+  test("sendFile concurrent with an in-flight write fails fast with ConflictingTransfer") {
+    val content: Array[Byte] = "emile conflict probe".getBytes("UTF-8")
+    tempFile(content)
+      .use(path =>
+        Tcp
+          .bind(anyLoopback)
+          .widen[EmileError]
+          .use(server => EffIO.liftF(conflictEcho(server, path, content)))
+          .absolve
+      )
+      .timeout(10.seconds)
+  }
+
+  private def conflictEcho(server: TcpServer, path: Path, content: Array[Byte]): IO[Unit] =
+    // A payload far larger than the socket buffers, sent to a peer that never reads, keeps the uv_write
+    // in flight (its callback fires only once every byte drains), so a concurrent sendFile observes it.
+    val big: Chunk[Byte] = Chunk.array(new Array[Byte](32 * 1024 * 1024))
+    val srvWork: IO[Unit] =
+      server.accepted.evalMap(_.use(_ => EffIO.liftF(IO.sleep(3.seconds)))).head.compile.drain.absolve
+
+    val cliWork: IO[Unit] =
+      Tcp
+        .connect(server.address)
+        .widen[EmileError]
+        .use(socket =>
+          OpenFile
+            .open(path)
+            .widen[EmileError]
+            .use(file =>
+              EffIO.liftF(
+                for
+                  writer <- socket.write(big).absolve.start
+                  _ <- IO.sleep(200.millis)
+                  result <- socket.sendFile(file, 0L, content.length.toLong).either
+                  _ <- writer.cancel
+                  _ <- IO(result match
+                         case Left(EmileError.Io.ConflictingTransfer) => ()
+                         case other => fail(s"expected ConflictingTransfer, got: $other"))
+                yield ()
+              )
+            )
+        )
+        .absolve
+
+    srvWork.background.use(_ => cliWork)
+  end conflictEcho
+
+  test("sendFile after a half-close fails fast with ConflictingTransfer") {
+    val content: Array[Byte] = "emile half-close conflict probe".getBytes("UTF-8")
+    tempFile(content)
+      .use(path =>
+        Tcp
+          .bind(anyLoopback)
+          .widen[EmileError]
+          .use(server => EffIO.liftF(halfCloseConflictEcho(server, path, content)))
+          .absolve
+      )
+      .timeout(10.seconds)
+  }
+
+  private def halfCloseConflictEcho(server: TcpServer, path: Path, content: Array[Byte]): IO[Unit] =
+    // The server holds the connection open so the client's half-close, then sendFile, both run against a
+    // live peer. endOfOutput's FIN would truncate a raw-fd sendFile, so the half-close terminally excludes
+    // it: a later sendFile must fail fast rather than send bytes after the FIN.
+    val srvWork: IO[Unit] =
+      server.accepted.evalMap(_.use(_ => EffIO.liftF(IO.sleep(2.seconds)))).head.compile.drain.absolve
+
+    val cliWork: IO[Unit] =
+      Tcp
+        .connect(server.address)
+        .widen[EmileError]
+        .use(socket =>
+          OpenFile
+            .open(path)
+            .widen[EmileError]
+            .use(file =>
+              EffIO.liftF(
+                for
+                  _ <- socket.endOfOutput.absolve
+                  result <- socket.sendFile(file, 0L, content.length.toLong).either
+                  _ <- IO(result match
+                         case Left(EmileError.Io.ConflictingTransfer) => ()
+                         case other => fail(s"expected ConflictingTransfer, got: $other"))
+                yield ()
+              )
+            )
+        )
+        .absolve
+
+    srvWork.background.use(_ => cliWork)
+  end halfCloseConflictEcho
 
   private def tempFile(content: Array[Byte]): Resource[IO, Path] =
     Resource.make(IO(writeTempFile(content)))(file => IO(file.delete(): Unit)).map(_.toPath)

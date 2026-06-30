@@ -17,9 +17,9 @@ object EchoServer extends EmileIOApp.Simple:
 ```
 
 Émile is the Scala Native event-loop integration cats-effect always wanted: one libuv `uv_loop_t` per work-stealing
-worker, plugged into cats-effect's `PollingSystem` hook. Every TCP, DNS, timer, signal, file, and fd-poll operation
-rides the same loop that schedules the fibre that issued it, with no `Future`/`Promise` indirection and no separate
-executor.
+worker, plugged into cats-effect's `PollingSystem` hook. Every TCP, IPC, DNS, timer, signal, file, and fd-poll
+operation runs on the loop thread that owns its handle - the worker the resource was acquired on - with no
+`Future`/`Promise` indirection and no separate executor.
 
 It is **Native-first**: the public API is shaped for the Scala Native representation; the typed-error channel is
 `boilerplate.effect.EffIO[+E, +A]`.
@@ -28,7 +28,7 @@ It is **Native-first**: the public API is shaped for the Scala Native representa
 
 | Module      | Artifact                        | Purpose                                                                                                            |
 |-------------|---------------------------------|--------------------------------------------------------------------------------------------------------------------|
-| `emile`     | `io.github.arashi01::emile`     | Core library: bootstrap, TCP, DNS, timers, signals, files, fd-polling.                                             |
+| `emile`     | `io.github.arashi01::emile`     | Core library: bootstrap, TCP, IPC (Unix-domain sockets), DNS, timers, signals, files, fd-polling.                  |
 | `emile-fs2` | `io.github.arashi01::emile-fs2` | fs2-networking interop: `TcpSocket.asFs2` / `TcpServer.acceptFs2` adapters onto `fs2.io.net.Socket[IO]`. Optional. |
 
 ```scala
@@ -83,7 +83,7 @@ Tcp.connect(SocketAddress(ipv4"127.0.0.1", port"8080")).use: socket =>
 Tcp.connect(host"example.com", port"443").use(socket => ???)
 ```
 
-A `TcpSocket` offers four read paths chosen by two axes - one-shot vs persistent, copying vs zero-copy:
+A connected socket offers five read methods across two axes - one-shot vs persistent, copying vs zero-copy:
 
 | Method     | Mode       | Buffer        | Typical use |
 |---|---|---|---|
@@ -93,13 +93,49 @@ A `TcpSocket` offers four read paths chosen by two axes - one-shot vs persistent
 | `reads`    | persistent | owned `Chunk` (stream) | TLS handshakes, websockets, line protocols |
 | `consume`  | persistent | zero-copy view | nghttp2-style synchronous chunk consumers |
 
-Writes mirror: `write(chunk: Chunk[Byte])`, `writes: Pipe[..., Byte, Nothing]`, `writePtr(buf, len)` for an
-already-native buffer, and `sendFile(file: OpenFile, offset, length)` for kernel-to-socket zero-copy via
-`uv_fs_sendfile`. Half-closes are `endOfInput` (send-only) and `endOfOutput` (`uv_shutdown`-backed receive-only).
+Writes mirror the reads: `write(chunk: Chunk[Byte])`, `writes: Pipe[..., Byte, Nothing]`, `writePtr(buf, len)` for an
+already-native buffer, `tryWritePtr(buf, len)` for a synchronous best-effort write, and `sendFile(file: OpenFile,
+offset, length)` for a kernel-to-socket transfer (see [OpenFile](#openfile)). Half-closes are `endOfInput` (send-only)
+and `endOfOutput` (`uv_shutdown`-backed receive-only).
 
 `socket.onLoop[A](thunk: => A)` submits a synchronous step to the socket's owning loop thread - the public face of
 emile's worker-affinity routing, useful for thread-confining a piece of C state (e.g. an nghttp2 `nghttp2_session`)
 alongside its read trampoline.
+
+### IPC (Unix-domain sockets)
+
+```scala
+import emile.*
+
+// Server on the Linux abstract namespace - no filesystem entry, nothing to clean up.
+Ipc.bind(IpcAddress.Abstract("my-service")).use: server =>
+  server.accepted.parEvalMapUnordered(64)(_.use(handle)).compile.drain
+
+// Client.
+Ipc.connect(IpcAddress.Abstract("my-service")).use: socket =>
+  socket.write(Chunk.array("ping".getBytes("UTF-8"))) >> socket.read(4096)
+```
+
+`Ipc` mirrors `Tcp`: a bound `IpcServer` yields the same `accepted` stream, and an `IpcSocket` shares the byte-stream
+surface documented under [TCP](#tcp) (`reads`, `writes`, `read`, `sendFile`, the half-closes). The address is an
+`IpcAddress` rather than an IP one:
+
+| `IpcAddress`     | Meaning                                                                                  |
+|------------------|------------------------------------------------------------------------------------------|
+| `Path(value)`    | a filesystem socket file - libuv removes it on close                                     |
+| `Abstract(name)` | a Linux abstract-namespace name - no filesystem entry, no residue                        |
+| `Autobind`       | bind only: the kernel assigns an abstract name, reported back as `Abstract` once bound   |
+
+Two operations are IPC-only:
+
+```scala
+socket.peerCredentials          // EmIO[EmileError.Io, PeerCredentials] - the peer's (processId, userId, groupId)
+server.chmod(IpcMode.ReadWrite) // EmIO[EmileError.Io, Unit] - set the socket file's access mode
+```
+
+`peerCredentials` reads the connected peer through `SO_PEERCRED`, for a server to authorise a local client. `chmod`
+applies to a `Path` server only; connecting needs write access, so `Writable` or `ReadWrite` opens a server to other
+local users.
 
 ### Timer
 
@@ -151,12 +187,24 @@ Backed by `uv_poll_t` - one-shot readiness on a foreign file descriptor.
 ### OpenFile
 
 ```scala
-OpenFile.open(java.nio.file.Paths.get("payload.bin")).use: file =>
-  file.size.flatMap(sz => socket.sendFile(file, 0L, sz))
+OpenFile.open(java.nio.file.Path.of("payload.bin")).use: file =>
+  file.read(65536)  // EmIO[EmileError.Io, Option[Chunk[Byte]]] - advances the position; None at EOF
+  file.reads        // EmStream[EmileError.Io, Byte] - the whole file from the current position
+  file.size         // EmIO[EmileError.Io, Long]
 ```
 
-`OpenFile` wraps a `uv_file` for the `sendFile` zero-copy path. The same file may serve multiple `sendFile` calls (range
-requests, partial-content responses) under one Resource scope.
+`OpenFile` wraps a read-only `uv_file`; the descriptor closes when the Resource releases, and one open file may serve
+many reads. To send a file to a socket, choose by need:
+
+```scala
+file.reads.through(socket.writes)  // whole-file body, fully backpressured (uv_write, one copy)
+socket.sendFile(file, 0L, size)    // single uv_fs_sendfile syscall, zero-copy, best-effort
+```
+
+`sendFile` is a single `uv_fs_sendfile` syscall: it returns the bytes actually sent, which may be fewer than `length`
+(0 when the socket send buffer is full). It writes the raw descriptor outside libuv's write queue, so it must not
+overlap an in-flight `write` or an `endOfOutput` half-close on the same socket - a concurrent one fails fast with
+`EmileError.Io.ConflictingTransfer`. For a complete, backpressured body, prefer `file.reads.through(socket.writes)`.
 
 ## Typed errors as values
 
@@ -248,14 +296,6 @@ libuv >= 1.52.0 at runtime (dynamic) or build time (static). Distros currently s
 rawhide**, **Alpine edge**. RHEL 10, Ubuntu 26.04, and Alpine 3.23.x still ship libuv 1.51.x.
 
 ## Caveats
-
-### IPv6 scope id is not carried through `SocketAddress`
-
-emile's `SocketAddress[IpAddress]` to C `sockaddr_in6` round-trip does not propagate the `sin6_scope_id` field. ip4s
-models the scope id as `Ipv6Address.scopeId`, but the round-trip narrows it to `None`. A link-local IPv6 address (e.g.
-`fe80::1%eth0`) therefore loses its scope across the conversion - bind / connect / accept will use scope id 0. If you
-need scope-bound link-local IPv6 today, supply the scope through the underlying interface configuration; a future emile
-release may carry it through explicitly.
 
 ### musl support is best-effort
 

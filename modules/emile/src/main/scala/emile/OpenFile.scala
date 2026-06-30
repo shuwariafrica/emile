@@ -17,14 +17,14 @@ package emile
 
 import java.nio.file.Path
 import scala.scalanative.libc.stdlib
-import scala.scalanative.unsafe.Ptr
-import scala.scalanative.unsafe.Zone
-import scala.scalanative.unsafe.toCString
+import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
 import boilerplate.effect.EffIO
 import cats.effect.IO
 import cats.effect.Resource
+import fs2.Chunk
+import fs2.Stream
 
 import emile.unsafe.CallbackBridge
 import emile.unsafe.LibUV
@@ -49,10 +49,23 @@ object OpenFile:
 
   given CanEqual[OpenFile, OpenFile] = CanEqual.derived
 
+  /** Read-chunk size for [[reads]]. */
+  inline val DefaultReadSize = 65536
+
   extension (file: OpenFile)
     /** The file's size in bytes. */
     def size: EmIO[EmileError.Io, Long] =
       EffIO.attempt(statSize(file), EmileError.Io.Unexpected(_))
+
+    /** Read up to `maxBytes` from the current position, advancing it; `None` at end of file. */
+    def read(maxBytes: Int): EmIO[EmileError.Io, Option[Chunk[Byte]]] =
+      readOnce(file, maxBytes)
+
+    /** The file's bytes from the current position as a stream - the backpressure-correct large-body
+      * source for `file.reads.through(socket.writes)`.
+      */
+    def reads: EmStream[EmileError.Io, Byte] =
+      Stream.repeatEval(readOnce(file, DefaultReadSize)).unNoneTerminate.unchunks
 
   /** The underlying `uv_file` descriptor - for `uv_fs_sendfile`. */
   private[emile] def descriptor(file: OpenFile): Int = file.file
@@ -98,6 +111,28 @@ object OpenFile:
           CallbackBridge.storeReq(file.poller, req, statDeliver(file.poller, cb))
           Some(Routing.onOwner(file.poller)(LibUV.uv_cancel(req): Unit))
 
+  private def readOnce(file: OpenFile, maxBytes: Int): EmIO[EmileError.Io, Option[Chunk[Byte]]] =
+    EffIO.attempt(readFile(file, maxBytes), EmileError.Io.Unexpected(_))
+
+  // The per-read buffer is freed in readDeliver on every path: uv_cancel only stops a still-queued
+  // read, so one a threadpool worker has already begun still runs to completion and must reclaim it.
+  private def readFile(file: OpenFile, maxBytes: Int): IO[Option[Chunk[Byte]]] =
+    IO.async[Option[Chunk[Byte]]]: cb =>
+      Routing.onOwner(file.poller):
+        val req = allocRequest()
+        val buf = allocReadBuffer(maxBytes)
+        val bufs = stackalloc[LibUV.Buf]()
+        bufs._1 = buf
+        bufs._2 = maxBytes.toCSize
+        val rc = LibUV.uv_fs_read(file.poller.loop, req, file.file, bufs, 1.toUInt, -1L, fsCb)
+        if rc < 0 then
+          stdlib.free(buf)
+          failRequest(req, cb, rc)
+          None
+        else
+          CallbackBridge.storeReq(file.poller, req, readDeliver(file.poller, cb, buf))
+          Some(Routing.onOwner(file.poller)(LibUV.uv_cancel(req): Unit))
+
   // uv_fs_close; the descriptor is treated as released whatever the close result.
   private def closeFile(file: OpenFile): IO[Unit] =
     IO.async[Unit]: cb =>
@@ -137,6 +172,22 @@ object OpenFile:
       cleanupRequest(req)
       cb(outcome)
 
+  private def readDeliver(
+    poller: LibuvPoller,
+    cb: Either[Throwable, Option[Chunk[Byte]]] => Unit,
+    buf: Ptr[Byte]
+  ): Ptr[Byte] => Unit =
+    req =>
+      val result = LibUV.uv_fs_get_result(req).toInt
+      val outcome: Either[EmileError.Io, Option[Chunk[Byte]]] =
+        if result < 0 then Left(IoMapping.fromCode(result))
+        else if result == 0 then Right(None)
+        else Right(Some(Chunk.fromBytePtr(buf, result)))
+      stdlib.free(buf)
+      CallbackBridge.releaseReq(poller, req)
+      cleanupRequest(req)
+      cb(outcome)
+
   private def closeDeliver(poller: LibuvPoller, cb: Either[Throwable, Unit] => Unit): Ptr[Byte] => Unit =
     req =>
       CallbackBridge.releaseReq(poller, req)
@@ -153,6 +204,11 @@ object OpenFile:
     val req = stdlib.calloc(1.toCSize, LibUV.uv_req_size(LibUV.UV_FS))
     if req == null then throw new OutOfMemoryError("emile: uv_fs_t allocation failed")
     else req
+
+  private def allocReadBuffer(maxBytes: Int): Ptr[Byte] =
+    val buf = stdlib.malloc(maxBytes.toCSize)
+    if buf == null then throw new OutOfMemoryError("emile: read buffer allocation failed")
+    else buf
   // scalafix:on DisableSyntax
 
   // uv_fs_cb: run the per-request delivery closure stored in the request's data slot.

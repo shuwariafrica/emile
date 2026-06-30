@@ -95,7 +95,9 @@ object EmileError:
   /** Common parent of [[Connect]] and [[Dns]] - the error type of `Tcp.connect(host, port)`. */
   sealed trait HostConnect extends EmileError
 
-  /** Failures from reads, writes, and half-closes on a live socket. */
+  /** Failures from I/O on a live handle - socket reads, writes, and half-closes, file reads, and
+    * fd-readiness.
+    */
   sealed trait Io extends EmileError
 
   object Io:
@@ -103,6 +105,9 @@ object EmileError:
     case object ConnectionReset extends EmileError("Connection reset", None) with Io
     case object BrokenPipe extends EmileError("Broken pipe", None) with Io
     case object AlreadyClosed extends EmileError("Resource already closed", None) with Io
+    case object ConflictingTransfer
+        extends EmileError("A sendFile cannot overlap a concurrent write, sendFile, or half-close on the same socket", None)
+        with Io
 
     final case class System(code: ErrorCode) extends EmileError("", None) with Io:
       override def getMessage: String = ErrorCode.describe(code)

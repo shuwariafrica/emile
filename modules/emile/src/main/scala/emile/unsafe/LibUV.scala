@@ -205,6 +205,17 @@ private[unsafe] object LibUVExtern:
 
   def uv_fs_open(loop: Ptr[Byte], req: Ptr[Byte], path: CString, flags: CInt, mode: CInt, cb: LibUV.FsCB): CInt = extern
   def uv_fs_close(loop: Ptr[Byte], req: Ptr[Byte], file: CInt, cb: LibUV.FsCB): CInt = extern
+  // A negative offset reads from (and advances) the current file position; the bufs array is copied,
+  // so it need not outlive the call - but each buffer's memory must, until the callback fires.
+  def uv_fs_read(
+    loop: Ptr[Byte],
+    req: Ptr[Byte],
+    file: CInt,
+    bufs: Ptr[LibUV.Buf],
+    nbufs: CUnsignedInt,
+    offset: CLongLong,
+    cb: LibUV.FsCB
+  ): CInt = extern
   def uv_fs_fstat(loop: Ptr[Byte], req: Ptr[Byte], file: CInt, cb: LibUV.FsCB): CInt = extern
   def uv_fs_sendfile(
     loop: Ptr[Byte],
