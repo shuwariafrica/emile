@@ -24,39 +24,51 @@ env:
 
 jobs:
   test_native:
-    name: "[${{ matrix.link }}: ${{ matrix.target }}] Tests"
+    name: "[${{ matrix.family }}-${{ matrix.arch }}${{ matrix.runtime }}] Tests (${{ matrix.link }} Linked)"
     strategy:
       fail-fast: false
       matrix:
         include:
-          - link: dynamic
-            target: fedora-x86_64
+          - link: Dynamic
+            family: linux
+            arch: x86_64
+            runtime: "-glibc"
             runner: ubuntu-24.04
             dockerImage: shuwariafrica/rawhide-jdk:17
-          - link: dynamic
-            target: fedora-aarch64
+          - link: Dynamic
+            family: linux
+            arch: aarch64
+            runtime: "-glibc"
             runner: ubuntu-24.04-arm
             dockerImage: shuwariafrica/rawhide-jdk:17
-          # Alpine cells fail until scala-native PR #4934 (sigaltstack/SIGSTKSZ
+          # musl cells fail until scala-native PR #4934 (sigaltstack/SIGSTKSZ
           # fix for musl) merges and a SN release ships. Remove `continueOnError`
-          # on all four alpine entries then.
-          - link: dynamic
-            target: alpine-x86_64
+          # on all four musl entries then.
+          - link: Dynamic
+            family: linux
+            arch: x86_64
+            runtime: "-musl"
             runner: ubuntu-24.04
             dockerImage: shuwariafrica/alpine-edge-jdk:17
             continueOnError: true
-          - link: dynamic
-            target: alpine-aarch64
+          - link: Dynamic
+            family: linux
+            arch: aarch64
+            runtime: "-musl"
             runner: ubuntu-24.04-arm
             dockerImage: shuwariafrica/alpine-edge-jdk:17
             continueOnError: true
-          - link: static
-            target: alpine-x86_64
+          - link: Static
+            family: linux
+            arch: x86_64
+            runtime: "-musl"
             runner: ubuntu-24.04
             dockerImage: shuwariafrica/alpine-edge-jdk:17
             continueOnError: true
-          - link: static
-            target: alpine-aarch64
+          - link: Static
+            family: linux
+            arch: aarch64
+            runtime: "-musl"
             runner: ubuntu-24.04-arm
             dockerImage: shuwariafrica/alpine-edge-jdk:17
             continueOnError: true
@@ -66,7 +78,7 @@ jobs:
     env:
       DOCKER_IMAGE: ${{ matrix.dockerImage }}
       EMILE_SYSTEM_LIBUV: "true"
-      EMILE_STATIC_LINK: ${{ matrix.link == 'static' && 'true' || 'false' }}
+      EMILE_STATIC_LINK: ${{ matrix.link == 'Static' && 'true' || 'false' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -77,7 +89,7 @@ jobs:
       - name: "[host] Run tests"
         run: ./project/scripts/run-sbt.sh -batch "emile/testOnly *" "emile-fs2/testOnly *"
       - name: "[host] Static-linkage assertion"
-        if: matrix.link == 'static'
+        if: matrix.link == 'Static'
         run: |
           emile_bin=$(find target/out -type f -name 'emile-test' -print -quit)
           fs2_bin=$(find target/out -type f -name 'emile-fs2-test' -print -quit)
@@ -94,14 +106,18 @@ jobs:
           done
 
   link_vendored:
-    name: "[vendored: glibc ${{ matrix.arch }}] snxLink"
+    name: "[${{ matrix.family }}-${{ matrix.arch }}${{ matrix.runtime }}] Execute Linker (Vendored)"
     strategy:
       fail-fast: false
       matrix:
         include:
-          - arch: x86_64
+          - family: linux
+            arch: x86_64
+            runtime: "-glibc"
             runner: ubuntu-24.04
-          - arch: aarch64
+          - family: linux
+            arch: aarch64
+            runtime: "-glibc"
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
     container: shuwariafrica/el10-jdk:17
@@ -231,4 +247,4 @@ jobs:
       - name: Set up sbt
         uses: sbt/setup-sbt@v1
       - name: Submit Dependency Graph
-        uses: scalacenter/sbt-dependency-submission@v3          
+        uses: scalacenter/sbt-dependency-submission@v3
