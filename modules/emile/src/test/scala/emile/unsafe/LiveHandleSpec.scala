@@ -21,7 +21,7 @@ import scala.scalanative.unsigned.*
 import cats.effect.IO
 
 import emile.EmileSuite
-import emile.LibuvPollingSystem
+import emile.LibUVPollingSystem
 
 /** Covers [[LiveHandle]]: the guard runs the thunk while the handle is live and returns its result;
   * once [[LiveHandle.closeOnOwner]] has freed the handle the guard short-circuits to the closed
@@ -53,15 +53,15 @@ final class LiveHandleSpec extends EmileSuite:
 
   // Acquire a fresh handle on the calling worker's loop, run use, then always reclaim it - the
   // reclaim is idempotent, so a test that also closes explicitly stays leak-free.
-  private def withLiveHandle[A](use: (LibuvPoller, LiveHandle) => IO[A]): IO[A] =
-    LibuvPollingSystem.currentPoller.flatMap: poller =>
+  private def withLiveHandle[A](use: (LibUVPoller, LiveHandle) => IO[A]): IO[A] =
+    LibUVPollingSystem.currentPoller.flatMap: poller =>
       routed(poller)(makeHandle(poller)).flatMap(live => use(poller, live).guarantee(LiveHandle.closeOnOwner(live)))
 
   // Run a synchronous thunk through the affinity router - the owner-thread context tryUse requires.
-  private def routed[A](poller: LibuvPoller)(thunk: => A): IO[A] = Routing.onOwner(poller)(thunk)
+  private def routed[A](poller: LibUVPoller)(thunk: => A): IO[A] = Routing.onOwner(poller)(thunk)
 
   // A live uv_timer_t (the simplest handle that needs no init callback) wrapped as an acquire would.
-  private def makeHandle(poller: LibuvPoller): LiveHandle =
+  private def makeHandle(poller: LibUVPoller): LiveHandle =
     val handle = stdlib.calloc(1.toCSize, LibUV.uv_handle_size(LibUV.UV_TIMER))
     LibUV.uv_timer_init(poller.loop, handle): Unit
     LiveHandle(poller, handle)

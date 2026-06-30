@@ -18,20 +18,20 @@ package emile
 import scala.concurrent.duration.FiniteDuration
 
 /** TCP keep-alive parameters - the three `uv_tcp_keepalive_ex` knobs together. Constructed through
-  * [[TcpKeepAlive$ TcpKeepAlive]].
+  * [[TCPKeepAlive$ TCPKeepAlive]].
   *
   * @param idle the `TCP_KEEPIDLE` window - the connection's idle period before the first probe
   * @param interval the `TCP_KEEPINTVL` spacing between probes
   * @param count the `TCP_KEEPCNT` cap on unanswered probes before the connection is dropped
   */
-final case class TcpKeepAlive(
+final case class TCPKeepAlive(
   idle: FiniteDuration,
   interval: FiniteDuration,
   count: Int
 ) derives CanEqual
 
-/** Presets and constants for [[TcpKeepAlive]]. */
-object TcpKeepAlive:
+/** Presets and constants for [[TCPKeepAlive]]. */
+object TCPKeepAlive:
 
   /** The default unanswered-probe cap - matches libuv's pre-`_ex` `uv_tcp_keepalive` (9 probes
     * after the initial delay).
@@ -41,4 +41,4 @@ object TcpKeepAlive:
   /** A keep-alive whose idle and probe-interval windows are both `after`, with the default probe
     * count.
     */
-  def simple(after: FiniteDuration): TcpKeepAlive = TcpKeepAlive(after, after, DefaultProbeCount)
+  def simple(after: FiniteDuration): TCPKeepAlive = TCPKeepAlive(after, after, DefaultProbeCount)

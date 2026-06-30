@@ -15,7 +15,7 @@
  */
 package emile
 
-/** The identity of the process at the peer end of a connected [[IpcSocket]], read on Linux from the
+/** The identity of the process at the peer end of a connected [[IPCSocket]], read on Linux from the
   * socket's `SO_PEERCRED` - for a server to authorise a local client. Obtained through
   * [[Socket$ Socket]].peerCredentials.
   */

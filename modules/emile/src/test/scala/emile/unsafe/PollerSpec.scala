@@ -21,26 +21,26 @@ import cats.effect.unsafe.PollResult
 
 import emile.LoopConfig
 
-/** Covers [[LibuvPoller]]: construction, the timeout modes of `poll`, cross-thread submission and
+/** Covers [[LibUVPoller]]: construction, the timeout modes of `poll`, cross-thread submission and
   * interruption, and clean shutdown.
   */
 final class PollerSpec extends munit.FunSuite:
 
   test("a fresh poller polls non-blocking and reports Complete") {
-    val poller = new LibuvPoller(LoopConfig.default)
+    val poller = new LibUVPoller(LoopConfig.default)
     assertEquals(poller.poll(0L), PollResult.Complete)
     poller.close()
   }
 
   test("interrupt makes the next poll return Interrupted") {
-    val poller = new LibuvPoller(LoopConfig.default)
+    val poller = new LibUVPoller(LoopConfig.default)
     poller.interrupt()
     assertEquals(poller.poll(0L), PollResult.Interrupted)
     poller.close()
   }
 
   test("a submitted runnable runs on the next poll") {
-    val poller = new LibuvPoller(LoopConfig.default)
+    val poller = new LibUVPoller(LoopConfig.default)
     val ran = new AtomicBoolean(false)
     assert(poller.submit(() => ran.set(true)))
     poller.poll(0L): Unit
@@ -49,14 +49,14 @@ final class PollerSpec extends munit.FunSuite:
   }
 
   test("isOwnerThread holds for the polling thread") {
-    val poller = new LibuvPoller(LoopConfig.default)
+    val poller = new LibUVPoller(LoopConfig.default)
     poller.poll(0L): Unit
     assert(poller.isOwnerThread)
     poller.close()
   }
 
   test("the profiler preset configures and constructs a poller") {
-    val poller = new LibuvPoller(LoopConfig.profilerProfile)
+    val poller = new LibUVPoller(LoopConfig.profilerProfile)
     assertEquals(poller.poll(0L), PollResult.Complete)
     poller.close()
   }

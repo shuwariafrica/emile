@@ -34,7 +34,7 @@ import emile.EmileError
 import emile.ErrorCode
 import emile.SignalNumber
 
-/** The process-wide signal supervisor. One worker - the first [[LibuvPoller]] built - owns every
+/** The process-wide signal supervisor. One worker - the first [[LibUVPoller]] built - owns every
   * `uv_signal_t`, and each delivery is broadcast to every subscriber's own queue. All supervisor
   * mutable state is confined to the supervisor loop thread, reached through [[Routing.onOwner]];
   * the lone `AtomicReference` only publishes the elected supervisor to the workers that read it.
@@ -48,7 +48,7 @@ private[emile] object SignalSupervisor:
 
   // Per-signum state, touched only on the supervisor loop thread, so its buffer and flag need no
   // synchronisation. The handle and saved-disposition buffer are allocated once and reused across
-  // start/stop cycles; the handle is reclaimed by LibuvPoller.close()'s uv_walk sweep, the small
+  // start/stop cycles; the handle is reclaimed by LibUVPoller.close()'s uv_walk sweep, the small
   // disposition buffer only at process exit.
   final private class SignalState(val handle: Ptr[Byte], val saved: Ptr[Byte]):
     val subscribers: mutable.ListBuffer[UnboundedQueue[IO, Unit]] = mutable.ListBuffer.empty
@@ -67,17 +67,17 @@ private[emile] object SignalSupervisor:
   private inline val DispositionBytes = 256
 
   // Cross-thread-published: written once by makePoller(), read by every worker.
-  private val supervisor: AtomicReference[LibuvPoller | Null] = new AtomicReference(null)
+  private val supervisor: AtomicReference[LibUVPoller | Null] = new AtomicReference(null)
 
-  /** Record the supervisor poller. Called once per poller by `LibuvPollingSystem.makePoller()`,
+  /** Record the supervisor poller. Called once per poller by `LibUVPollingSystem.makePoller()`,
     * which the `WorkStealingThreadPool` constructor runs sequentially: the first poller wins, and
     * the `compareAndSet` publishes it to the other workers.
     */
-  def electSupervisor(p: LibuvPoller): Unit =
+  def electSupervisor(p: LibUVPoller): Unit =
     supervisor.compareAndSet(null, p): Unit
 
-  private def supervisorPoller: LibuvPoller =
-    supervisor.get().getOrElse(throw EmileError.Runtime.MissingLibuvPollingSystem)
+  private def supervisorPoller: LibUVPoller =
+    supervisor.get().getOrElse(throw EmileError.Runtime.MissingLibUVPollingSystem)
 
   private def checked(rc: Int): Unit =
     if rc != 0 then throw EmileError.Runtime.System(ErrorCode(rc))

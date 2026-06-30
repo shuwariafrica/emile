@@ -19,35 +19,35 @@ import com.comcast.ip4s.Hostname
 import com.comcast.ip4s.IpAddress
 import com.comcast.ip4s.Port
 
-/** Covers [[Dns]]: forward and reverse resolution of the loopback host, which the platform resolver
+/** Covers [[DNS]]: forward and reverse resolution of the loopback host, which the platform resolver
   * answers locally without a network.
   */
-final class DnsSpec extends EmileSuite:
+final class DNSSpec extends EmileSuite:
 
   private val localhost: Hostname = Hostname.fromString("localhost").get
   private val loopback: IpAddress = IpAddress.fromString("127.0.0.1").get
 
   test("resolve(host, port) returns the loopback address") {
-    Dns
+    DNS
       .resolve(localhost, Port.fromInt(0).get)
       .absolve
       .map(addresses => assert(addresses.toList.exists(_.host.isLoopback)))
   }
 
   test("resolve(host) returns the loopback address") {
-    Dns.resolve(localhost).absolve.map(addresses => assert(addresses.toList.exists(_.isLoopback)))
+    DNS.resolve(localhost).absolve.map(addresses => assert(addresses.toList.exists(_.isLoopback)))
   }
 
   test("reverse resolves the loopback address to a host name") {
-    Dns.reverse(loopback).absolve.map(name => assert(name.toString.nonEmpty))
+    DNS.reverse(loopback).absolve.map(name => assert(name.toString.nonEmpty))
   }
 
   test("resolve of a nonexistent host fails with UnknownHost") {
     val invalid = Hostname.fromString("nonexistent.invalid").get
-    Dns.resolve(invalid, Port.fromInt(0).get).either.map {
-      case Left(EmileError.Dns.UnknownHost(host)) => assertEquals(host, "nonexistent.invalid")
+    DNS.resolve(invalid, Port.fromInt(0).get).either.map {
+      case Left(EmileError.DNS.UnknownHost(host)) => assertEquals(host, "nonexistent.invalid")
       case other => fail(s"expected UnknownHost, got: $other")
     }
   }
 
-end DnsSpec
+end DNSSpec

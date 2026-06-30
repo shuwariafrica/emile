@@ -30,7 +30,7 @@ import com.comcast.ip4s.GenSocketAddress
 import com.comcast.ip4s.IpAddress
 import com.comcast.ip4s.SocketAddress
 
-/** fs2-io interop: adapt emile's typed-error [[TcpSocket]] / [[TcpServer]] handles to fs2's
+/** fs2-io interop: adapt emile's typed-error [[TCPSocket]] / [[TCPServer]] handles to fs2's
   * `Socket[IO]` and `Stream[IO, Socket[IO]]`. The typed-to-Throwable projection happens through
   * `EffIO.absolve` - the deliberate, lossless relaxation point for code that consumes fs2's
   * `Throwable`-channel `Socket[F]` shape (`EmileError <: Exception`, so the value carried into the
@@ -38,25 +38,25 @@ import com.comcast.ip4s.SocketAddress
   */
 object Fs2Interop:
 
-  extension (socket: TcpSocket)
-    /** Adapt this [[TcpSocket]] to `fs2.io.net.Socket[IO]`. The fs2 socket's lifecycle stays bound
-      * to the emile `Resource` scope the [[TcpSocket]] was acquired in.
+  extension (socket: TCPSocket)
+    /** Adapt this [[TCPSocket]] to `fs2.io.net.Socket[IO]`. The fs2 socket's lifecycle stays bound
+      * to the emile `Resource` scope the [[TCPSocket]] was acquired in.
       */
     def asFs2: Fs2Socket[IO] = new Fs2SocketAdapter(socket)
 
-  extension (server: TcpServer)
-    /** Adapt this [[TcpServer]]'s accepted-connection stream to the `Stream[IO, Socket[IO]]` shape
+  extension (server: TCPServer)
+    /** Adapt this [[TCPServer]]'s accepted-connection stream to the `Stream[IO, Socket[IO]]` shape
       * fs2's own server side yields - matches `ServerSocket.accept`.
       */
     def acceptFs2: Stream[IO, Fs2Socket[IO]] =
       server.accepted.translate(absolveIoK).flatMap(connection => Stream.resource(connection.mapK(absolveIoK)).map(_.asFs2))
 
   // Typed-error -> IO natural transformation; needed because Stream.translate takes a ~>, not absolve.
-  private val absolveIoK: FunctionK[EffIO.Of[EmileError.Io], IO] =
-    new FunctionK[EffIO.Of[EmileError.Io], IO]:
-      def apply[A](fa: EffIO[EmileError.Io, A]): IO[A] = fa.absolve
+  private val absolveIoK: FunctionK[EffIO.Of[EmileError.IO], IO] =
+    new FunctionK[EffIO.Of[EmileError.IO], IO]:
+      def apply[A](fa: EffIO[EmileError.IO, A]): IO[A] = fa.absolve
 
-  // Options the adapter forwards to a TcpSocket setter; getOption still returns None for them, as
+  // Options the adapter forwards to a TCPSocket setter; getOption still returns None for them, as
   // emile exposes no corresponding getters.
   private val SupportedOptionKeys: Set[SocketOption.Key[?]] = Set(
     StandardSocketOptions.TCP_NODELAY,
@@ -65,11 +65,11 @@ object Fs2Interop:
 
   // fs2's SO_KEEPALIVE is a single boolean, but emile's keep-alive carries idle/interval/count, so
   // turning it on applies this 60-second profile.
-  private val DefaultKeepAlive: TcpKeepAlive = TcpKeepAlive.simple(60.seconds)
+  private val DefaultKeepAlive: TCPKeepAlive = TCPKeepAlive.simple(60.seconds)
 
-  // Backs asFs2: forwards every method to the emile TcpSocket, absolving the typed-error channel onto
+  // Backs asFs2: forwards every method to the emile TCPSocket, absolving the typed-error channel onto
   // IO's Throwable channel.
-  final private class Fs2SocketAdapter(socket: TcpSocket) extends Fs2Socket[IO]:
+  final private class Fs2SocketAdapter(socket: TCPSocket) extends Fs2Socket[IO]:
 
     def address: GenSocketAddress = socket.address
     def peerAddress: GenSocketAddress = socket.peerAddress

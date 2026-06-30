@@ -40,31 +40,31 @@ import com.comcast.ip4s.SocketAddress
 
 import emile.unsafe.CallbackBridge
 import emile.unsafe.LibUV
-import emile.unsafe.LibuvPoller
+import emile.unsafe.LibUVPoller
 import emile.unsafe.Routing
 import emile.unsafe.SockAddr
 
 /** Forward and reverse name resolution over libuv's asynchronous `getaddrinfo` / `getnameinfo`.
   * Resolution order follows the platform resolver.
   */
-object Dns:
+object DNS:
 
   /** Resolves `host` to the socket addresses it serves at `port`. The result is non-empty - libuv
     * reports success only when at least one address is returned.
     */
-  def resolve(host: Host, port: Port): EmIO[EmileError.Dns, NonEmptyList[SocketAddress[IpAddress]]] =
+  def resolve(host: Host, port: Port): EmIO[EmileError.DNS, NonEmptyList[SocketAddress[IpAddress]]] =
     val node = hostString(host)
     lookup(node, port.value.toString, node)
 
   /** Resolves `host` to its IP addresses. The result is non-empty. */
-  def resolve(host: Hostname): EmIO[EmileError.Dns, NonEmptyList[IpAddress]] =
+  def resolve(host: Hostname): EmIO[EmileError.DNS, NonEmptyList[IpAddress]] =
     lookup(host.toString, "0", host.toString).map(_.map(_.host))
 
   /** Resolves `addr` to a host name via reverse lookup. */
-  def reverse(addr: IpAddress): EmIO[EmileError.Dns, Hostname] =
+  def reverse(addr: IpAddress): EmIO[EmileError.DNS, Hostname] =
     EffIO
-      .liftF(LibuvPollingSystem.currentPoller)
-      .flatMap(poller => EffIO.attempt(getNameInfo(poller, addr), EmileError.Dns.Unexpected(_)))
+      .liftF(LibUVPollingSystem.currentPoller)
+      .flatMap(poller => EffIO.attempt(getNameInfo(poller, addr), EmileError.DNS.Unexpected(_)))
 
   // IDN must resolve via its ASCII (Punycode) hostname; plain hosts use their text form.
   private def hostString(host: Host): String = host match
@@ -76,13 +76,13 @@ object Dns:
     node: String,
     service: String,
     label: String
-  ): EmIO[EmileError.Dns, NonEmptyList[SocketAddress[IpAddress]]] =
+  ): EmIO[EmileError.DNS, NonEmptyList[SocketAddress[IpAddress]]] =
     EffIO
-      .liftF(LibuvPollingSystem.currentPoller)
-      .flatMap(poller => EffIO.attempt(getAddrInfo(poller, node, service, label), EmileError.Dns.Unexpected(_)))
+      .liftF(LibUVPollingSystem.currentPoller)
+      .flatMap(poller => EffIO.attempt(getAddrInfo(poller, node, service, label), EmileError.DNS.Unexpected(_)))
 
   private def getAddrInfo(
-    poller: LibuvPoller,
+    poller: LibUVPoller,
     node: String,
     service: String,
     label: String
@@ -93,7 +93,7 @@ object Dns:
         val rc = startGetAddrInfo(poller, req, node, service)
         if rc < 0 then
           stdlib.free(req)
-          cb(Left(DnsMapping.fromCode(rc, label)))
+          cb(Left(DNSMapping.fromCode(rc, label)))
           None
         else
           CallbackBridge.storeReq(poller, req, addrDeliver(poller, cb, label))
@@ -101,41 +101,41 @@ object Dns:
           // addrDeliver maps to an error and frees the request.
           Some(Routing.onOwner(poller)(LibUV.uv_cancel(req): Unit))
 
-  private def getNameInfo(poller: LibuvPoller, addr: IpAddress): IO[Hostname] =
+  private def getNameInfo(poller: LibUVPoller, addr: IpAddress): IO[Hostname] =
     IO.async[Hostname]: cb =>
       Routing.onOwner(poller):
         val req = allocRequest(LibUV.UV_GETNAMEINFO)
         val rc = startGetNameInfo(poller, req, addr)
         if rc < 0 then
           stdlib.free(req)
-          cb(Left(DnsMapping.fromCode(rc, addr.toString)))
+          cb(Left(DNSMapping.fromCode(rc, addr.toString)))
           None
         else
           CallbackBridge.storeReq(poller, req, nameDeliver(poller, cb, addr.toString))
           Some(Routing.onOwner(poller)(LibUV.uv_cancel(req): Unit))
 
   private def addrDeliver(
-    poller: LibuvPoller,
+    poller: LibUVPoller,
     cb: Either[Throwable, NonEmptyList[SocketAddress[IpAddress]]] => Unit,
     label: String
   ): (Ptr[Byte], Int, Ptr[Byte]) => Unit =
     (req, status, res) =>
       val outcome =
-        if status < 0 then Left(DnsMapping.fromCode(status, label))
-        else NonEmptyList.fromList(collectAddresses(res)).toRight(EmileError.Dns.UnknownHost(label))
+        if status < 0 then Left(DNSMapping.fromCode(status, label))
+        else NonEmptyList.fromList(collectAddresses(res)).toRight(EmileError.DNS.UnknownHost(label))
       LibUV.uv_freeaddrinfo(res)
       CallbackBridge.releaseReq(poller, req)
       cb(outcome)
 
   private def nameDeliver(
-    poller: LibuvPoller,
+    poller: LibUVPoller,
     cb: Either[Throwable, Hostname] => Unit,
     label: String
   ): (Ptr[Byte], Int, CString) => Unit =
     (req, status, hostname) =>
-      val outcome: Either[EmileError.Dns, Hostname] =
-        if status < 0 then Left(DnsMapping.fromCode(status, label))
-        else Hostname.fromString(fromCString(hostname)).toRight(EmileError.Dns.UnknownHost(label))
+      val outcome: Either[EmileError.DNS, Hostname] =
+        if status < 0 then Left(DNSMapping.fromCode(status, label))
+        else Hostname.fromString(fromCString(hostname)).toRight(EmileError.DNS.UnknownHost(label))
       CallbackBridge.releaseReq(poller, req)
       cb(outcome)
 
@@ -160,7 +160,7 @@ object Dns:
     if req == null then throw new OutOfMemoryError("emile: libuv request allocation failed")
     else req
 
-  private def startGetAddrInfo(poller: LibuvPoller, req: Ptr[Byte], node: String, service: String): Int =
+  private def startGetAddrInfo(poller: LibUVPoller, req: Ptr[Byte], node: String, service: String): Int =
     val hints = stdlib.calloc(1.toCSize, sizeof[netdb.addrinfo])
     val ai = hints.asInstanceOf[Ptr[netdb.addrinfo]]
     // AI_ADDRCONFIG: return a family's addresses only when the host has an interface configured for
@@ -171,7 +171,7 @@ object Dns:
     stdlib.free(hints)
     rc
 
-  private def startGetNameInfo(poller: LibuvPoller, req: Ptr[Byte], addr: IpAddress): Int =
+  private def startGetNameInfo(poller: LibUVPoller, req: Ptr[Byte], addr: IpAddress): Int =
     val storage = stdlib.calloc(1.toCSize, SockAddr.storageSize.toCSize)
     SockAddr.write(SocketAddress(addr, Port.Wildcard), storage)
     // NI_NAMEREQD: fail (EAI_NONAME) when the address has no reverse record, rather than returning
@@ -194,4 +194,4 @@ object Dns:
       walkAddrinfo(node._8.asInstanceOf[Ptr[netdb.addrinfo]], entry.fold(acc)(_ :: acc))
   // scalafix:on DisableSyntax
 
-end Dns
+end DNS

@@ -37,7 +37,7 @@ trait EmileIOApp extends IOApp:
 
   final override def run(args: List[String]): IO[ExitCode] = runEff(args).absolve
 
-  final override protected def pollingSystem: PollingSystem = LibuvPollingSystem(loopConfig)
+  final override protected def pollingSystem: PollingSystem = LibUVPollingSystem(loopConfig)
 
 /** Companion of [[EmileIOApp]]; holds the argument-free [[EmileIOApp.Simple Simple]] variant. */
 object EmileIOApp:
@@ -55,7 +55,7 @@ object EmileIOApp:
 
     final override def run: IO[Unit] = runEff.absolve
 
-    final override protected def pollingSystem: PollingSystem = LibuvPollingSystem(loopConfig)
+    final override protected def pollingSystem: PollingSystem = LibUVPollingSystem(loopConfig)
 
 end EmileIOApp
 
@@ -80,7 +80,7 @@ object Emile:
     * synchronous [[runEff]] runners are layered on this.
     */
   private[emile] def unsafeRuntime(config: LoopConfig): IORuntime =
-    IORuntimeBuilder().setPollingSystem(LibuvPollingSystem(config)).build()
+    IORuntimeBuilder().setPollingSystem(LibUVPollingSystem(config)).build()
 
   /** Run a typed-error effect to its value on a fresh libuv `IORuntime` with the default
     * [[LoopConfig]], shutting the runtime down afterwards.

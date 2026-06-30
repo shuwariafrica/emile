@@ -25,16 +25,16 @@ import com.comcast.ip4s.Ipv4Address
 import com.comcast.ip4s.Port
 import com.comcast.ip4s.SocketAddress
 
-/** Covers [[Tcp.bind]] / [[Tcp.connect]] / [[StreamServer.accepted]] and the read / write socket
+/** Covers [[TCP.bind]] / [[TCP.connect]] / [[StreamServer.accepted]] and the read / write socket
   * surface end-to-end over a loopback round-trip.
   */
-final class TcpSpec extends EmileSuite:
+final class TCPSpec extends EmileSuite:
 
   private val anyLoopback: SocketAddress[IpAddress] =
     SocketAddress(Ipv4Address.fromString("127.0.0.1").get, Port.fromInt(0).get)
 
   test("bind on loopback yields a loopback address with a kernel-picked port") {
-    Tcp
+    TCP
       .bind(anyLoopback)
       .widen[EmileError]
       .use(server =>
@@ -49,7 +49,7 @@ final class TcpSpec extends EmileSuite:
 
   test("server-client echo via read + write") {
     val payload: Chunk[Byte] = Chunk.array("hello, emile!".getBytes("UTF-8"))
-    Tcp
+    TCP
       .bind(anyLoopback)
       .widen[EmileError]
       .use(server => EffIO.liftF(echoRoundTrip(server, payload)))
@@ -60,7 +60,7 @@ final class TcpSpec extends EmileSuite:
   test("stress: 50 sequential connect+echo cycles exercise the GC under load") {
     val payload: Chunk[Byte] = Chunk.array("ping".getBytes("UTF-8"))
     val iterations = 50
-    Tcp
+    TCP
       .bind(anyLoopback)
       .widen[EmileError]
       .use(server => EffIO.liftF(stressEcho(server, payload, iterations)))
@@ -70,7 +70,7 @@ final class TcpSpec extends EmileSuite:
 
   test("reads + writes + endOfOutput stream the payload through a pipe echo") {
     val payload: Chunk[Byte] = Chunk.array("streaming-emile-payload".getBytes("UTF-8"))
-    Tcp
+    TCP
       .bind(anyLoopback)
       .widen[EmileError]
       .use(server => EffIO.liftF(streamingEcho(server, payload)))
@@ -80,9 +80,9 @@ final class TcpSpec extends EmileSuite:
 
   test("connect to a closed port fails on the Connect channel") {
     val closedAddress: IO[SocketAddress[IpAddress]] =
-      Tcp.bind(anyLoopback).use(server => EffIO.suspend(server.address)).absolve
+      TCP.bind(anyLoopback).use(server => EffIO.suspend(server.address)).absolve
     closedAddress
-      .flatMap(addr => Tcp.connect(addr).use(_ => EffIO.suspend(())).either)
+      .flatMap(addr => TCP.connect(addr).use(_ => EffIO.suspend(())).either)
       .map {
         case Left(_: EmileError.Connect) => ()
         case other => fail(s"expected a Connect error, got: $other")
@@ -90,7 +90,7 @@ final class TcpSpec extends EmileSuite:
       .timeout(5.seconds)
   }
 
-  private def echoRoundTrip(server: TcpServer, payload: Chunk[Byte]): IO[Unit] =
+  private def echoRoundTrip(server: TCPServer, payload: Chunk[Byte]): IO[Unit] =
     val srvWork: IO[Unit] =
       server.accepted
         .evalMap(
@@ -108,7 +108,7 @@ final class TcpSpec extends EmileSuite:
         .absolve
 
     val cliWork: IO[Unit] =
-      Tcp
+      TCP
         .connect(server.address)
         .widen[EmileError]
         .use(socket =>
@@ -125,7 +125,7 @@ final class TcpSpec extends EmileSuite:
     srvWork.background.use(_ => cliWork)
   end echoRoundTrip
 
-  private def streamingEcho(server: TcpServer, payload: Chunk[Byte]): IO[Unit] =
+  private def streamingEcho(server: TCPServer, payload: Chunk[Byte]): IO[Unit] =
     val srvWork: IO[Unit] =
       server.accepted
         .evalMap(_.use(socket => socket.reads.through(socket.writes).compile.drain.flatMap(_ => socket.endOfOutput)))
@@ -135,7 +135,7 @@ final class TcpSpec extends EmileSuite:
         .absolve
 
     val cliWork: IO[Unit] =
-      Tcp
+      TCP
         .connect(server.address)
         .widen[EmileError]
         .use(socket =>
@@ -153,7 +153,7 @@ final class TcpSpec extends EmileSuite:
     srvWork.background.use(_ => cliWork)
   end streamingEcho
 
-  private def stressEcho(server: TcpServer, payload: Chunk[Byte], iterations: Int): IO[Unit] =
+  private def stressEcho(server: TCPServer, payload: Chunk[Byte], iterations: Int): IO[Unit] =
     val srvWork: IO[Unit] =
       server.accepted
         .evalMap(
@@ -171,7 +171,7 @@ final class TcpSpec extends EmileSuite:
         .absolve
 
     val oneCycle: IO[Unit] =
-      Tcp
+      TCP
         .connect(server.address)
         .widen[EmileError]
         .use(socket =>
@@ -188,4 +188,4 @@ final class TcpSpec extends EmileSuite:
     srvWork.background.use(_ => oneCycle.replicateA_(iterations))
   end stressEcho
 
-end TcpSpec
+end TCPSpec

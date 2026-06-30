@@ -18,7 +18,7 @@ package emile
 import scala.concurrent.duration.DurationInt
 
 /** Per-socket TCP tuning, applied at bind / connect / accept time. Constructed from the presets and
-  * `copy` on [[TcpOptions$ TcpOptions]].
+  * `copy` on [[TCPOptions$ TCPOptions]].
   *
   * @param noDelay enable `TCP_NODELAY` to disable Nagle's algorithm
   * @param simultaneousAccepts whether to use libuv's simultaneous-accept mode on the listener (load
@@ -27,22 +27,22 @@ import scala.concurrent.duration.DurationInt
   * @param ipv6Only disable IPv6 dual-stack on an IPv6 bind
   * @param listenBacklog the `listen(2)` backlog
   */
-final case class TcpOptions(
+final case class TCPOptions(
   noDelay: Boolean,
-  keepAlive: Option[TcpKeepAlive],
+  keepAlive: Option[TCPKeepAlive],
   simultaneousAccepts: Boolean,
   reusePort: Boolean,
   ipv6Only: Boolean,
   listenBacklog: Int
 ) derives CanEqual
 
-/** Presets for [[TcpOptions]]. */
-object TcpOptions:
+/** Presets for [[TCPOptions]]. */
+object TCPOptions:
 
   /** Conservative defaults: Nagle on, no keep-alive, simultaneous-accept on, no port reuse, IPv6
     * dual-stack on, listen backlog 1024.
     */
-  val default: TcpOptions = TcpOptions(
+  val default: TCPOptions = TCPOptions(
     noDelay = false,
     keepAlive = None,
     simultaneousAccepts = true,
@@ -52,13 +52,13 @@ object TcpOptions:
   )
 
   /** Defaults plus `TCP_NODELAY` - the low-latency profile. */
-  val lowLatency: TcpOptions = default.copy(noDelay = true)
+  val lowLatency: TCPOptions = default.copy(noDelay = true)
 
   /** Defaults plus `TCP_NODELAY`, `SO_REUSEPORT`, and a 60-second keep-alive - the server profile. */
-  val server: TcpOptions = default.copy(
+  val server: TCPOptions = default.copy(
     noDelay = true,
     reusePort = true,
-    keepAlive = Some(TcpKeepAlive.simple(60.seconds))
+    keepAlive = Some(TCPKeepAlive.simple(60.seconds))
   )
 
-end TcpOptions
+end TCPOptions

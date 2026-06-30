@@ -26,12 +26,12 @@ import cats.effect.IO
 import cats.effect.Resource
 import fs2.Chunk
 
-/** Covers [[Ipc.bind]] / [[Ipc.connect]] / [[StreamServer.accepted]] and the [[IpcSocket]] surface
+/** Covers [[IPC.bind]] / [[IPC.connect]] / [[StreamServer.accepted]] and the [[IPCSocket]] surface
   * end-to-end over a Unix-domain round-trip - hermetic (no loopback, no filesystem entry) via the
   * Linux abstract namespace, plus the filesystem path, address round-trip, peer credentials, and
   * socket-file chmod.
   */
-final class IpcSpec extends EmileSuite:
+final class IPCSpec extends EmileSuite:
 
   private val nameCounter = new AtomicInteger(0)
 
@@ -39,11 +39,11 @@ final class IpcSpec extends EmileSuite:
   // this process's pid plus a per-suite counter.
   private def uniqueName: String = s"emile-ipcspec-${unistd.getpid()}-${nameCounter.incrementAndGet()}"
 
-  private def uniqueAbstract: IpcAddress = IpcAddress.Abstract(uniqueName)
+  private def uniqueAbstract: IPCAddress = IPCAddress.Abstract(uniqueName)
 
   test("abstract-namespace server-client echo via read + write") {
     val payload: Chunk[Byte] = Chunk.array("hello, ipc!".getBytes("UTF-8"))
-    Ipc
+    IPC
       .bind(uniqueAbstract)
       .widen[EmileError]
       .use(server => EffIO.liftF(echoRoundTrip(server, payload)))
@@ -53,10 +53,10 @@ final class IpcSpec extends EmileSuite:
 
   test("bind reports the bound abstract address") {
     val name = uniqueName
-    Ipc
-      .bind(IpcAddress.Abstract(name))
+    IPC
+      .bind(IPCAddress.Abstract(name))
       .widen[EmileError]
-      .use(server => EffIO.suspend(assertEquals(server.address, IpcAddress.Abstract(name))))
+      .use(server => EffIO.suspend(assertEquals(server.address, IPCAddress.Abstract(name))))
       .absolve
       .timeout(5.seconds)
   }
@@ -65,8 +65,8 @@ final class IpcSpec extends EmileSuite:
     val payload: Chunk[Byte] = Chunk.array("streaming-ipc-payload".getBytes("UTF-8"))
     tempSocketPath
       .use(path =>
-        Ipc
-          .bind(IpcAddress.Path(path))
+        IPC
+          .bind(IPCAddress.Path(path))
           .widen[EmileError]
           .use(server => EffIO.liftF(streamingEcho(server, payload)))
           .absolve
@@ -75,7 +75,7 @@ final class IpcSpec extends EmileSuite:
   }
 
   test("peerCredentials reports the connected peer's process identity") {
-    Ipc
+    IPC
       .bind(uniqueAbstract)
       .widen[EmileError]
       .use(server => EffIO.liftF(checkPeerCredentials(server)))
@@ -86,16 +86,16 @@ final class IpcSpec extends EmileSuite:
   test("chmod sets the socket-file access mode on a filesystem-path server") {
     tempSocketPath
       .use(path =>
-        Ipc
-          .bind(IpcAddress.Path(path))
+        IPC
+          .bind(IPCAddress.Path(path))
           .widen[EmileError]
-          .use(server => server.chmod(IpcMode.ReadWrite))
+          .use(server => server.chmod(IPCMode.ReadWrite))
           .absolve
       )
       .timeout(5.seconds)
   }
 
-  private def echoRoundTrip(server: IpcServer, payload: Chunk[Byte]): IO[Unit] =
+  private def echoRoundTrip(server: IPCServer, payload: Chunk[Byte]): IO[Unit] =
     val srvWork: IO[Unit] =
       server.accepted
         .evalMap(
@@ -113,7 +113,7 @@ final class IpcSpec extends EmileSuite:
         .absolve
 
     val cliWork: IO[Unit] =
-      Ipc
+      IPC
         .connect(server.address)
         .widen[EmileError]
         .use(socket =>
@@ -130,7 +130,7 @@ final class IpcSpec extends EmileSuite:
     srvWork.background.use(_ => cliWork)
   end echoRoundTrip
 
-  private def streamingEcho(server: IpcServer, payload: Chunk[Byte]): IO[Unit] =
+  private def streamingEcho(server: IPCServer, payload: Chunk[Byte]): IO[Unit] =
     val srvWork: IO[Unit] =
       server.accepted
         .evalMap(_.use(socket => socket.reads.through(socket.writes).compile.drain.flatMap(_ => socket.endOfOutput)))
@@ -140,7 +140,7 @@ final class IpcSpec extends EmileSuite:
         .absolve
 
     val cliWork: IO[Unit] =
-      Ipc
+      IPC
         .connect(server.address)
         .widen[EmileError]
         .use(socket =>
@@ -158,14 +158,14 @@ final class IpcSpec extends EmileSuite:
     srvWork.background.use(_ => cliWork)
   end streamingEcho
 
-  private def checkPeerCredentials(server: IpcServer): IO[Unit] =
+  private def checkPeerCredentials(server: IPCServer): IO[Unit] =
     // The peer of the client socket is this very process (the server listens here), so the reported
     // process and user ids must be this process's own.
     val srvWork: IO[Unit] =
       server.accepted.evalMap(_.use(_ => EffIO.liftF(IO.sleep(500.millis)))).head.compile.drain.absolve
 
     val cliWork: IO[Unit] =
-      Ipc
+      IPC
         .connect(server.address)
         .widen[EmileError]
         .use(socket =>
@@ -193,4 +193,4 @@ final class IpcSpec extends EmileSuite:
     Files.deleteIfExists(dir.resolve("test.sock")): Unit
     Files.deleteIfExists(dir): Unit
 
-end IpcSpec
+end IPCSpec

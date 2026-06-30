@@ -17,7 +17,7 @@ package emile.unsafe
 
 import cats.syntax.all.*
 
-import emile.LibuvPollingSystem
+import emile.LibUVPollingSystem
 
 /** Guards the load-bearing invariant: a thunk routed through `Routing.onOwner` always runs on the
   * thread that owns its loop, even under heavy concurrent scheduling. Each operation reports whether
@@ -31,7 +31,7 @@ final class AffinitySpec extends StressSuite:
   private val operations = 20000
 
   test("every Routing.onOwner thunk runs on its owner loop thread under concurrent load") {
-    LibuvPollingSystem.currentPoller.flatMap: poller =>
+    LibUVPollingSystem.currentPoller.flatMap: poller =>
       List
         .range(0, operations)
         .parTraverse(_ => Routing.onOwner(poller)(poller.isOwnerThread))

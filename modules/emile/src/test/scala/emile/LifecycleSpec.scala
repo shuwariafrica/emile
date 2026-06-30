@@ -29,7 +29,7 @@ import com.comcast.ip4s.SocketAddress
 /** Covers the socket lifecycle under concurrency and after release: [[StreamServer.accepted]] keeps
   * each socket valid for its handler's `use` scope even when many run at once (the `server` preset
   * is used, so the finish-socket options are also applied on the accept path), and an operation on
-  * a socket whose resource has released fails with [[EmileError.Io.AlreadyClosed]] rather than a
+  * a socket whose resource has released fails with [[EmileError.IO.AlreadyClosed]] rather than a
   * use-after-free.
   */
 final class LifecycleSpec extends EmileSuite:
@@ -39,8 +39,8 @@ final class LifecycleSpec extends EmileSuite:
 
   test("accepted sockets stay valid through concurrent slow handlers") {
     val payload: Chunk[Byte] = Chunk.array("concurrent-emile".getBytes("UTF-8"))
-    Tcp
-      .bind(anyLoopback, TcpOptions.server)
+    TCP
+      .bind(anyLoopback, TCPOptions.server)
       .widen[EmileError]
       .use(server => EffIO.liftF(concurrentEcho(server, payload, 6)))
       .absolve
@@ -48,23 +48,23 @@ final class LifecycleSpec extends EmileSuite:
   }
 
   test("an operation on a released socket fails with AlreadyClosed, not a use-after-free") {
-    Tcp
+    TCP
       .bind(anyLoopback)
       .widen[EmileError]
       .use(server =>
         EffIO.liftF(
           for
             addr <- IO(server.address)
-            leaked <- Tcp.connect(addr).widen[EmileError].use(socket => EffIO.succeed(socket)).absolve
+            leaked <- TCP.connect(addr).widen[EmileError].use(socket => EffIO.succeed(socket)).absolve
             result <- leaked.read(4096).either
-          yield assertEquals(result, Left(EmileError.Io.AlreadyClosed): Either[EmileError.Io, Option[Chunk[Byte]]])
+          yield assertEquals(result, Left(EmileError.IO.AlreadyClosed): Either[EmileError.IO, Option[Chunk[Byte]]])
         )
       )
       .absolve
       .timeout(5.seconds)
   }
 
-  private def concurrentEcho(server: TcpServer, payload: Chunk[Byte], n: Int): IO[Unit] =
+  private def concurrentEcho(server: TCPServer, payload: Chunk[Byte], n: Int): IO[Unit] =
     val addr = server.address
     val srvWork: IO[Unit] =
       server.accepted
@@ -83,7 +83,7 @@ final class LifecycleSpec extends EmileSuite:
         .drain
         .absolve
     val client: IO[Unit] =
-      Tcp
+      TCP
         .connect(addr)
         .widen[EmileError]
         .use(socket =>

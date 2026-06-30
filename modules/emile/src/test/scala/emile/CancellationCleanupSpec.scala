@@ -35,18 +35,18 @@ final class CancellationCleanupSpec extends EmileSuite:
     // this would hang; Resource.makeFull + poll makes the in-flight connect cancelable. The address is
     // unroutable either way, so the attempt always fails - the guard is that it *completes* in bound.
     val unreachable = SocketAddress(ipv4"192.0.2.1", port"9")
-    Tcp.connect(unreachable).use_.timeout(3.seconds, EmileError.Connect.TimedOut).either.map(_.isLeft).assertEquals(true)
+    TCP.connect(unreachable).use_.timeout(3.seconds, EmileError.Connect.TimedOut).either.map(_.isLeft).assertEquals(true)
   }
 
   test("cancelling a waiting accept leaves the listener able to accept") {
-    Tcp
+    TCP
       .bind(anyLoopback)
       .widen[EmileError]
       .use { server =>
         val acceptOne = server.acceptOne.use_.absolve
         // Hold the connection so the server accepts before the client closes (a rapid close aborts the accept).
         val connectHold =
-          Tcp.connect(server.address).widen[EmileError].use(_ => EffIO.liftF(IO.sleep(150.millis))).absolve
+          TCP.connect(server.address).widen[EmileError].use(_ => EffIO.liftF(IO.sleep(150.millis))).absolve
         EffIO.liftF(acceptOne.timeoutTo(300.millis, IO.unit).flatMap(_ => IO.both(acceptOne, connectHold).map(_ => ())))
       }
       .absolve
@@ -56,11 +56,11 @@ final class CancellationCleanupSpec extends EmileSuite:
   test("releasing a server while a connection arrives does not crash") {
     // Release the server mid-connection (short window, repeated) to race a connection callback against the close.
     def round: IO[Unit] =
-      Tcp
+      TCP
         .bind(anyLoopback)
         .widen[EmileError]
         .use { server =>
-          val connect = Tcp.connect(server.address).widen[EmileError].use_.absolve.attempt.map(_ => ())
+          val connect = TCP.connect(server.address).widen[EmileError].use_.absolve.attempt.map(_ => ())
           EffIO.liftF(connect.timeoutTo(20.millis, IO.unit))
         }
         .absolve

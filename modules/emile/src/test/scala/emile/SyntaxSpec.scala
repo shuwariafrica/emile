@@ -26,18 +26,18 @@ import fs2.Stream
 final class SyntaxSpec extends EmileSuite:
 
   test("widenS widens an EmStream's error channel, preserving values and a typed error") {
-    val values: EmStream[EmileError.Io, Int] = Stream(1, 2, 3).covary[EmIO.Of[EmileError.Io]]
-    val failed: EmStream[EmileError.Io, Int] = Stream.eval(EffIO.fail(EmileError.Io.AlreadyClosed))
+    val values: EmStream[EmileError.IO, Int] = Stream(1, 2, 3).covary[EmIO.Of[EmileError.IO]]
+    val failed: EmStream[EmileError.IO, Int] = Stream.eval(EffIO.fail(EmileError.IO.AlreadyClosed))
     for
       ok <- values.widenS[EmileError].compile.toList.either
       err <- failed.widenS[EmileError].compile.toList.either
     yield
       assertEquals(ok, Right(List(1, 2, 3)): Either[EmileError, List[Int]])
-      assertEquals(err, Left(EmileError.Io.AlreadyClosed): Either[EmileError, List[Int]])
+      assertEquals(err, Left(EmileError.IO.AlreadyClosed): Either[EmileError, List[Int]])
   }
 
   test("widen reinterprets an EmPipe at a wider error and preserves its behaviour") {
-    val doubling: EmPipe[EmileError.Io, Int, Int] = _.map(_ * 2)
+    val doubling: EmPipe[EmileError.IO, Int, Int] = _.map(_ * 2)
     val widened: EmPipe[EmileError, Int, Int] = doubling.widen[EmileError]
     Stream(1, 2, 3)
       .covary[EmIO.Of[EmileError]]

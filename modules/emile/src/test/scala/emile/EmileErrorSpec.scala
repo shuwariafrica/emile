@@ -35,22 +35,22 @@ final class EmileErrorSpec extends munit.FunSuite:
     assertEquals(ConnectMapping.fromCode(-9999), EmileError.Connect.System(ErrorCode(-9999)): EmileError.Connect)
   }
 
-  test("IoMapping dispatches each known code and falls through to System") {
-    assertEquals(IoMapping.fromCode(ErrorCode.UV_EOF), EmileError.Io.EndOfStream: EmileError.Io)
-    assertEquals(IoMapping.fromCode(ErrorCode.UV_ECONNRESET), EmileError.Io.ConnectionReset: EmileError.Io)
-    assertEquals(IoMapping.fromCode(ErrorCode.UV_EPIPE), EmileError.Io.BrokenPipe: EmileError.Io)
-    assertEquals(IoMapping.fromCode(-9999), EmileError.Io.System(ErrorCode(-9999)): EmileError.Io)
+  test("IOMapping dispatches each known code and falls through to System") {
+    assertEquals(IOMapping.fromCode(ErrorCode.UV_EOF), EmileError.IO.EndOfStream: EmileError.IO)
+    assertEquals(IOMapping.fromCode(ErrorCode.UV_ECONNRESET), EmileError.IO.ConnectionReset: EmileError.IO)
+    assertEquals(IOMapping.fromCode(ErrorCode.UV_EPIPE), EmileError.IO.BrokenPipe: EmileError.IO)
+    assertEquals(IOMapping.fromCode(-9999), EmileError.IO.System(ErrorCode(-9999)): EmileError.IO)
   }
 
-  test("DnsMapping maps the name-resolution codes to UnknownHost") {
-    assertEquals(DnsMapping.fromCode(-3008, "host.example"), EmileError.Dns.UnknownHost("host.example"): EmileError.Dns)
-    assertEquals(DnsMapping.fromCode(-3007, "host.example"), EmileError.Dns.UnknownHost("host.example"): EmileError.Dns)
-    assertEquals(DnsMapping.fromCode(-9999, "host.example"), EmileError.Dns.System(ErrorCode(-9999)): EmileError.Dns)
+  test("DNSMapping maps the name-resolution codes to UnknownHost") {
+    assertEquals(DNSMapping.fromCode(-3008, "host.example"), EmileError.DNS.UnknownHost("host.example"): EmileError.DNS)
+    assertEquals(DNSMapping.fromCode(-3007, "host.example"), EmileError.DNS.UnknownHost("host.example"): EmileError.DNS)
+    assertEquals(DNSMapping.fromCode(-9999, "host.example"), EmileError.DNS.System(ErrorCode(-9999)): EmileError.DNS)
   }
 
   test("Unexpected returns an already-typed cause unwrapped") {
     assertEquals(EmileError.Bind.Unexpected(EmileError.Bind.PermissionDenied), EmileError.Bind.PermissionDenied: EmileError.Bind)
-    assertEquals(EmileError.Io.Unexpected(EmileError.Io.ConnectionReset), EmileError.Io.ConnectionReset: EmileError.Io)
+    assertEquals(EmileError.IO.Unexpected(EmileError.IO.ConnectionReset), EmileError.IO.ConnectionReset: EmileError.IO)
   }
 
   test("Unexpected wraps a foreign throwable with a derived message") {

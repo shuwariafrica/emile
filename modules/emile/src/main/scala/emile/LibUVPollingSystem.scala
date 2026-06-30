@@ -21,53 +21,53 @@ import cats.effect.unsafe.PollingContext
 import cats.effect.unsafe.PollingSystem
 import cats.effect.unsafe.metrics.PollerMetrics
 
-import emile.unsafe.LibuvPoller
+import emile.unsafe.LibUVPoller
 import emile.unsafe.SignalSupervisor
 
 /** The `cats.effect` [[cats.effect.unsafe.PollingSystem PollingSystem]] that plugs a libuv loop
-  * into each work-stealing worker. Build it through [[LibuvPollingSystem$ LibuvPollingSystem]] and
+  * into each work-stealing worker. Build it through [[LibUVPollingSystem$ LibUVPollingSystem]] and
   * install it with [[EmileIOApp]] or [[Emile.runtime]].
   */
-final class LibuvPollingSystem private (config: LoopConfig) extends PollingSystem:
+final class LibUVPollingSystem private (config: LoopConfig) extends PollingSystem:
 
-  type Api = LibuvPollingSystem.Access
-  type Poller = LibuvPoller
+  type Api = LibUVPollingSystem.Access
+  type Poller = LibUVPoller
 
-  def makeApi(ctx: PollingContext[LibuvPoller]): LibuvPollingSystem.Access =
-    new LibuvPollingSystem.Access(ctx)
+  def makeApi(ctx: PollingContext[LibUVPoller]): LibUVPollingSystem.Access =
+    new LibUVPollingSystem.Access(ctx)
 
-  def makePoller(): LibuvPoller =
-    val p = new LibuvPoller(config)
+  def makePoller(): LibUVPoller =
+    val p = new LibUVPoller(config)
     SignalSupervisor.electSupervisor(p)
     p
 
-  def closePoller(p: LibuvPoller): Unit = p.close()
+  def closePoller(p: LibUVPoller): Unit = p.close()
 
-  def poll(p: LibuvPoller, nanos: Long): PollResult = p.poll(nanos)
+  def poll(p: LibUVPoller, nanos: Long): PollResult = p.poll(nanos)
 
   // One uv_run iteration drains every ready event, so there is no separate ready-event step.
-  def processReadyEvents(p: LibuvPoller): Boolean = false
+  def processReadyEvents(p: LibUVPoller): Boolean = false
 
-  def needsPoll(p: LibuvPoller): Boolean = p.needsPoll
+  def needsPoll(p: LibUVPoller): Boolean = p.needsPoll
 
-  def interrupt(t: Thread, p: LibuvPoller): Unit = p.interrupt()
+  def interrupt(t: Thread, p: LibUVPoller): Unit = p.interrupt()
 
   def close(): Unit = ()
 
-  def metrics(p: LibuvPoller): PollerMetrics = LibuvPollingSystem.zeroMetrics
+  def metrics(p: LibUVPoller): PollerMetrics = LibUVPollingSystem.zeroMetrics
 
-end LibuvPollingSystem
+end LibUVPollingSystem
 
-/** Factory for [[LibuvPollingSystem]], and the worker-facing [[LibuvPollingSystem.Access Access]]
-  * handle onto a [[emile.unsafe.LibuvPoller LibuvPoller]].
+/** Factory for [[LibUVPollingSystem]], and the worker-facing [[LibUVPollingSystem.Access Access]]
+  * handle onto a [[emile.unsafe.LibUVPoller LibUVPoller]].
   */
-object LibuvPollingSystem:
+object LibUVPollingSystem:
 
   /** A libuv polling system with the default [[LoopConfig]]. */
-  def apply(): LibuvPollingSystem = apply(LoopConfig.default)
+  def apply(): LibUVPollingSystem = apply(LoopConfig.default)
 
   /** A libuv polling system tuned by `config`. */
-  def apply(config: LoopConfig): LibuvPollingSystem = new LibuvPollingSystem(config)
+  def apply(config: LoopConfig): LibUVPollingSystem = new LibUVPollingSystem(config)
 
   /** A single shared all-zero `PollerMetrics`. emile does not instrument poller metrics, and
     * cats-effect's own `PollerMetrics.noop` is `private[effect]` so cannot be reused.
@@ -100,25 +100,25 @@ object LibuvPollingSystem:
       def totalWriteOperationsErroredCount(): Long = 0L
       def totalWriteOperationsCanceledCount(): Long = 0L
 
-  /** The worker-facing handle onto a [[emile.unsafe.LibuvPoller LibuvPoller]] - obtains the calling
+  /** The worker-facing handle onto a [[emile.unsafe.LibUVPoller LibUVPoller]] - obtains the calling
     * worker's poller and tests poller ownership.
     */
-  final class Access private[emile] (ctx: PollingContext[LibuvPoller]):
+  final class Access private[emile] (ctx: PollingContext[LibUVPoller]):
 
-    private[emile] def withCurrentPoller[A](f: LibuvPoller => IO[A]): IO[A] =
-      IO.async_[LibuvPoller](cb => ctx.accessPoller(p => cb(Right(p)))).flatMap(f)
+    private[emile] def withCurrentPoller[A](f: LibUVPoller => IO[A]): IO[A] =
+      IO.async_[LibUVPoller](cb => ctx.accessPoller(p => cb(Right(p)))).flatMap(f)
 
-    private[emile] def isOwnPoller(p: LibuvPoller): Boolean = ctx.ownPoller(p)
+    private[emile] def isOwnPoller(p: LibUVPoller): Boolean = ctx.ownPoller(p)
 
   /** The libuv poller of the calling work-stealing worker - the entry point through which a
     * libuv-backed operation reaches its loop. Fails with
-    * `EmileError.Runtime.MissingLibuvPollingSystem` when the runtime carries no libuv polling
+    * `EmileError.Runtime.MissingLibUVPollingSystem` when the runtime carries no libuv polling
     * system.
     */
-  private[emile] def currentPoller: IO[LibuvPoller] =
+  private[emile] def currentPoller: IO[LibUVPoller] =
     IO.pollers.flatMap: pollers =>
       pollers.collectFirst { case access: Access => access } match
         case Some(access) => access.withCurrentPoller(IO.pure)
-        case None => IO.raiseError(EmileError.Runtime.MissingLibuvPollingSystem)
+        case None => IO.raiseError(EmileError.Runtime.MissingLibUVPollingSystem)
 
-end LibuvPollingSystem
+end LibUVPollingSystem

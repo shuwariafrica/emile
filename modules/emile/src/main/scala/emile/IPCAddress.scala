@@ -15,10 +15,10 @@
  */
 package emile
 
-/** The address of an [[Ipc$ Ipc]] (Unix-domain / named-pipe) endpoint - the kind-indexed address an
-  * [[IpcSocket]] / [[IpcServer]] carries, as a filesystem path, a Linux abstract name, or autobind.
+/** The address of an [[IPC$ IPC]] (Unix-domain / named-pipe) endpoint - the kind-indexed address an
+  * [[IPCSocket]] / [[IPCServer]] carries, as a filesystem path, a Linux abstract name, or autobind.
   */
-enum IpcAddress derives CanEqual:
+enum IPCAddress derives CanEqual:
 
   /** A filesystem entry - a Unix-domain socket path on Unix, a named pipe on Windows. */
   case Path(value: String)

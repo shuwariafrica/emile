@@ -33,14 +33,14 @@ sealed abstract class EmileError(message: String, cause: Option[Throwable])
 
 /** The [[EmileError]] hierarchy - one sealed sub-trait per failure domain ([[EmileError.Bind
   * Bind]], [[EmileError.Connect Connect]], [[EmileError.HostConnect HostConnect]],
-  * [[EmileError.Io Io]], [[EmileError.Dns Dns]], [[EmileError.Runtime Runtime]]). Each domain
+  * [[EmileError.IO IO]], [[EmileError.DNS DNS]], [[EmileError.Runtime Runtime]]). Each domain
   * offers named cases for the common failures, a `System(code)` catch-all for any other libuv code,
   * and an idempotent `Unexpected(cause)` wrapping a raw `Throwable` - an already-typed cause is
   * returned unchanged.
   */
 object EmileError:
 
-  /** Failures from `Tcp.bind`. */
+  /** Failures from `TCP.bind`. */
   sealed trait Bind extends EmileError
 
   object Bind:
@@ -62,8 +62,8 @@ object EmileError:
         case t => new Unexpected(t)
   end Bind
 
-  /** Failures from `Tcp.connect` to an `IpAddress`; through [[HostConnect]] the hostname overload
-    * unifies these with [[Dns]].
+  /** Failures from `TCP.connect` to an `IpAddress`; through [[HostConnect]] the hostname overload
+    * unifies these with [[DNS]].
     */
   sealed trait Connect extends HostConnect
 
@@ -92,52 +92,52 @@ object EmileError:
         case t => new Unexpected(t)
   end Connect
 
-  /** Common parent of [[Connect]] and [[Dns]] - the error type of `Tcp.connect(host, port)`. */
+  /** Common parent of [[Connect]] and [[DNS]] - the error type of `TCP.connect(host, port)`. */
   sealed trait HostConnect extends EmileError
 
   /** Failures from I/O on a live handle - socket reads, writes, and half-closes, file reads, and
     * fd-readiness.
     */
-  sealed trait Io extends EmileError
+  sealed trait IO extends EmileError
 
-  object Io:
-    case object EndOfStream extends EmileError("End of stream", None) with Io
-    case object ConnectionReset extends EmileError("Connection reset", None) with Io
-    case object BrokenPipe extends EmileError("Broken pipe", None) with Io
-    case object AlreadyClosed extends EmileError("Resource already closed", None) with Io
+  object IO:
+    case object EndOfStream extends EmileError("End of stream", None) with IO
+    case object ConnectionReset extends EmileError("Connection reset", None) with IO
+    case object BrokenPipe extends EmileError("Broken pipe", None) with IO
+    case object AlreadyClosed extends EmileError("Resource already closed", None) with IO
     case object ConflictingTransfer
         extends EmileError("A sendFile cannot overlap a concurrent write, sendFile, or half-close on the same socket", None)
-        with Io
+        with IO
 
-    final case class System(code: ErrorCode) extends EmileError("", None) with Io:
+    final case class System(code: ErrorCode) extends EmileError("", None) with IO:
       override def getMessage: String = ErrorCode.describe(code)
 
-    final class Unexpected private (val cause: Throwable) extends EmileError("", Some(cause)) with Io:
+    final class Unexpected private (val cause: Throwable) extends EmileError("", Some(cause)) with IO:
       override def getMessage: String = s"Unexpected I/O failure: ${cause.getMessage}"
 
     object Unexpected:
-      def apply(cause: Throwable): Io = cause match
-        case e: Io => e
+      def apply(cause: Throwable): IO = cause match
+        case e: IO => e
         case t => new Unexpected(t)
-  end Io
+  end IO
 
-  /** Failures from `Dns.resolve` / `Dns.reverse`. */
-  sealed trait Dns extends HostConnect
+  /** Failures from `DNS.resolve` / `DNS.reverse`. */
+  sealed trait DNS extends HostConnect
 
-  object Dns:
-    final case class UnknownHost(host: String) extends EmileError(s"Unknown host: $host", None) with Dns
+  object DNS:
+    final case class UnknownHost(host: String) extends EmileError(s"Unknown host: $host", None) with DNS
 
-    final case class TemporaryFailure(host: String) extends EmileError(s"Temporary name-resolution failure: $host", None) with Dns
+    final case class TemporaryFailure(host: String) extends EmileError(s"Temporary name-resolution failure: $host", None) with DNS
 
-    final case class System(code: ErrorCode) extends EmileError("", None) with Dns:
+    final case class System(code: ErrorCode) extends EmileError("", None) with DNS:
       override def getMessage: String = ErrorCode.describe(code)
 
-    final class Unexpected private (val cause: Throwable) extends EmileError("", Some(cause)) with Dns:
+    final class Unexpected private (val cause: Throwable) extends EmileError("", Some(cause)) with DNS:
       override def getMessage: String = s"Unexpected DNS failure: ${cause.getMessage}"
 
     object Unexpected:
-      def apply(cause: Throwable): Dns = cause match
-        case e: Dns => e
+      def apply(cause: Throwable): DNS = cause match
+        case e: DNS => e
         case t => new Unexpected(t)
 
   /** Programmer errors and runtime invariants - surfaced through cats-effect's `Throwable` channel
@@ -146,9 +146,9 @@ object EmileError:
   sealed trait Runtime extends EmileError
 
   object Runtime:
-    case object MissingLibuvPollingSystem
+    case object MissingLibUVPollingSystem
         extends EmileError(
-          "LibuvPollingSystem is not installed in this IORuntime. Use EmileIOApp or Emile.runtime.",
+          "LibUVPollingSystem is not installed in this IORuntime. Use EmileIOApp or Emile.runtime.",
           None
         )
         with Runtime
@@ -187,22 +187,22 @@ private[emile] object ConnectMapping:
     case ErrorCode.UV_ETIMEDOUT => EmileError.Connect.TimedOut
     case other => EmileError.Connect.System(ErrorCode(other))
 
-/** Maps a libuv error code to a typed [[EmileError.Io]], falling through to
-  * [[EmileError.Io.System]] for codes with no dedicated case.
+/** Maps a libuv error code to a typed [[EmileError.IO]], falling through to
+  * [[EmileError.IO.System]] for codes with no dedicated case.
   */
-private[emile] object IoMapping:
-  def fromCode(code: Int): EmileError.Io = code match
-    case ErrorCode.UV_EOF => EmileError.Io.EndOfStream
-    case ErrorCode.UV_ECONNRESET => EmileError.Io.ConnectionReset
-    case ErrorCode.UV_EPIPE => EmileError.Io.BrokenPipe
-    case other => EmileError.Io.System(ErrorCode(other))
+private[emile] object IOMapping:
+  def fromCode(code: Int): EmileError.IO = code match
+    case ErrorCode.UV_EOF => EmileError.IO.EndOfStream
+    case ErrorCode.UV_ECONNRESET => EmileError.IO.ConnectionReset
+    case ErrorCode.UV_EPIPE => EmileError.IO.BrokenPipe
+    case other => EmileError.IO.System(ErrorCode(other))
 
-/** Maps a libuv resolver code, with the host being resolved, to a typed [[EmileError.Dns]]. The
+/** Maps a libuv resolver code, with the host being resolved, to a typed [[EmileError.DNS]]. The
   * `getaddrinfo` name-resolution codes become `UnknownHost` (which carries the host); all others
   * become `System`.
   */
-private[emile] object DnsMapping:
-  def fromCode(code: Int, host: String): EmileError.Dns = code match
-    case ErrorCode.UV_EAI_NONAME | ErrorCode.UV_EAI_NODATA => EmileError.Dns.UnknownHost(host)
-    case ErrorCode.UV_EAI_AGAIN => EmileError.Dns.TemporaryFailure(host)
-    case other => EmileError.Dns.System(ErrorCode(other))
+private[emile] object DNSMapping:
+  def fromCode(code: Int, host: String): EmileError.DNS = code match
+    case ErrorCode.UV_EAI_NONAME | ErrorCode.UV_EAI_NODATA => EmileError.DNS.UnknownHost(host)
+    case ErrorCode.UV_EAI_AGAIN => EmileError.DNS.TemporaryFailure(host)
+    case other => EmileError.DNS.System(ErrorCode(other))

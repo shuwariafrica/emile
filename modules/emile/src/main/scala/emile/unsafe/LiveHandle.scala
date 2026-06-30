@@ -19,7 +19,7 @@ import scala.scalanative.unsafe.Ptr
 
 import cats.effect.IO
 
-final private class LiveHandleState(val poller: LibuvPoller, val handle: Ptr[Byte]):
+final private class LiveHandleState(val poller: LibUVPoller, val handle: Ptr[Byte]):
   // Owner-confined: markClosed writes this and tryUse reads it only inside Routing.onOwner, so every
   // access is on the one owner thread and needs no barrier. @volatile is kept solely as a cross-thread
   // visibility seam; it grants visibility, not mutual exclusion, so it cannot by itself make an
@@ -45,13 +45,13 @@ private[emile] object LiveHandle:
     * and run its `uv_*_init`. The handle starts live; [[closeOnOwner]] is the only transition to
     * closed.
     */
-  def apply(poller: LibuvPoller, handle: Ptr[Byte]): LiveHandle =
+  def apply(poller: LibUVPoller, handle: Ptr[Byte]): LiveHandle =
     new LiveHandleState(poller, handle)
 
   given CanEqual[LiveHandle, LiveHandle] = CanEqual.derived
 
   /** The owning loop's poller - the loop every operation on this handle must route to. */
-  def poller(live: LiveHandle): LibuvPoller = live.poller
+  def poller(live: LiveHandle): LibUVPoller = live.poller
 
   /** Run `f` with the raw handle pointer while the handle is live, else yield `ifClosed`. Call only
     * on the owner thread (inside [[Routing.onOwner]]): that serialisation orders the liveness check

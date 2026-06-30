@@ -18,7 +18,7 @@ package emile.unsafe
 import cats.syntax.all.*
 
 import emile.EmileSuite
-import emile.LibuvPollingSystem
+import emile.LibUVPollingSystem
 
 /** Covers [[Routing.onOwner]]: a thunk routed to a live poller runs and returns its value, many
   * concurrent routings all complete, and a cancelled routing completes without deadlock.
@@ -26,18 +26,18 @@ import emile.LibuvPollingSystem
 final class RoutingSpec extends EmileSuite:
 
   test("onOwner runs the thunk on the owning loop and returns its value") {
-    LibuvPollingSystem.currentPoller.flatMap(poller => Routing.onOwner(poller)(21 * 2)).assertEquals(42)
+    LibUVPollingSystem.currentPoller.flatMap(poller => Routing.onOwner(poller)(21 * 2)).assertEquals(42)
   }
 
   test("concurrent onOwner routings all complete") {
-    LibuvPollingSystem.currentPoller
+    LibUVPollingSystem.currentPoller
       .flatMap(poller => List.range(0, 64).parTraverse(n => Routing.onOwner(poller)(n)))
       .map(_.sum)
       .assertEquals((0 until 64).sum)
   }
 
   test("a cancelled onOwner routing completes without deadlock") {
-    LibuvPollingSystem.currentPoller.flatMap(poller => Routing.onOwner(poller)(()).start.flatMap(_.cancel))
+    LibUVPollingSystem.currentPoller.flatMap(poller => Routing.onOwner(poller)(()).start.flatMap(_.cancel))
   }
 
 end RoutingSpec

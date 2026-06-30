@@ -28,14 +28,14 @@ import com.comcast.ip4s.SocketAddress
 /** Covers the cancellation finaliser on [[Socket.read]]: a read whose `IO.async` is cancelled must
   * clear the libuv `uv_read_start` state so a subsequent read does not hit `UV_EALREADY`.
   */
-final class TcpCancellationSpec extends EmileSuite:
+final class TCPCancellationSpec extends EmileSuite:
 
   private val anyLoopback: SocketAddress[IpAddress] =
     SocketAddress(Ipv4Address.fromString("127.0.0.1").get, Port.fromInt(0).get)
 
   test("a cancelled read leaves the socket readable on the next attempt") {
     val payload: Chunk[Byte] = Chunk.array("post-cancel".getBytes("UTF-8"))
-    Tcp
+    TCP
       .bind(anyLoopback)
       .widen[EmileError]
       .use(server => EffIO.liftF(cancelThenRead(server, payload)))
@@ -43,7 +43,7 @@ final class TcpCancellationSpec extends EmileSuite:
       .timeout(5.seconds)
   }
 
-  private def cancelThenRead(server: TcpServer, payload: Chunk[Byte]): IO[Unit] =
+  private def cancelThenRead(server: TCPServer, payload: Chunk[Byte]): IO[Unit] =
     val srvWork: IO[Unit] =
       server.accepted
         .evalMap(
@@ -59,7 +59,7 @@ final class TcpCancellationSpec extends EmileSuite:
         .absolve
 
     val cliWork: IO[Unit] =
-      Tcp
+      TCP
         .connect(server.address)
         .widen[EmileError]
         .use(socket =>
@@ -77,4 +77,4 @@ final class TcpCancellationSpec extends EmileSuite:
     srvWork.background.use(_ => cliWork)
   end cancelThenRead
 
-end TcpCancellationSpec
+end TCPCancellationSpec

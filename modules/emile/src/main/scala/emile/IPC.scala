@@ -27,18 +27,18 @@ import cats.effect.std.unsafe.UnboundedQueue
 
 import emile.unsafe.CallbackBridge
 import emile.unsafe.LibUV
-import emile.unsafe.LibuvPoller
+import emile.unsafe.LibUVPoller
 import emile.unsafe.Routing
 
 /** Entry points for local inter-process stream sockets - Unix-domain sockets on Unix, named pipes
-  * on Windows ([[SocketKind.Ipc]]). Bind a listener or connect a client over an [[IpcAddress]] (a
+  * on Windows ([[SocketKind.IPC]]). Bind a listener or connect a client over an [[IPCAddress]] (a
   * filesystem path, the Linux abstract namespace, or autobind); each operation runs on the worker
-  * that acquires the resource, and the resulting [[IpcServer]] / [[IpcSocket]] carries that
+  * that acquires the resource, and the resulting [[IPCServer]] / [[IPCSocket]] carries that
   * worker's loop. The byte-stream surface is the shared one on [[Socket$ Socket]].
   */
-object Ipc:
+object IPC:
 
-  /** The `listen(2)` backlog for an [[IpcServer]]. */
+  /** The `listen(2)` backlog for an [[IPCServer]]. */
   inline val ListenBacklog = 128
 
   // sun_path caps near 108 bytes and libuv truncates a longer name, so 256 holds any usable name.
@@ -48,19 +48,19 @@ object Ipc:
     * failure surfaces here rather than later on the accept stream. A filesystem-path server removes
     * its socket file on release (libuv unlinks it on close).
     */
-  def bind(address: IpcAddress): EmResource[EmileError.Bind, IpcServer] =
-    Resource.make[EffIO.Of[EmileError.Bind], IpcServer](bindAcquire(address))(server => EffIO.liftF(StreamServer.release(server)))
+  def bind(address: IPCAddress): EmResource[EmileError.Bind, IPCServer] =
+    Resource.make[EffIO.Of[EmileError.Bind], IPCServer](bindAcquire(address))(server => EffIO.liftF(StreamServer.release(server)))
 
   /** Connect to the server at `address`. The connect is cancelable: a `timeout` or cancellation
-    * aborts the in-flight `uv_pipe_connect2` and frees the handle. [[IpcAddress.Autobind]] is
+    * aborts the in-flight `uv_pipe_connect2` and frees the handle. [[IPCAddress.Autobind]] is
     * bind-only and is rejected here.
     */
-  def connect(address: IpcAddress): EmResource[EmileError.Connect, IpcSocket] =
-    Resource.makeFull[EffIO.Of[EmileError.Connect], IpcSocket](poll => poll(connectRaw(address)))(socket =>
+  def connect(address: IPCAddress): EmResource[EmileError.Connect, IPCSocket] =
+    Resource.makeFull[EffIO.Of[EmileError.Connect], IPCSocket](poll => poll(connectRaw(address)))(socket =>
       EffIO.liftF(Socket.release(socket))
     )
 
-  // Shared (not built per bind): an Ipc server carries no per-socket options, so finish is a no-op.
+  // Shared (not built per bind): an IPC server carries no per-socket options, so finish is a no-op.
   private val ipcAcceptor: StreamServer.Acceptor =
     new StreamServer.Acceptor(
       handleType = LibUV.UV_NAMED_PIPE,
@@ -69,45 +69,45 @@ object Ipc:
       finish = _ => EffIO.succeed(())
     )
 
-  private def bindAcquire(address: IpcAddress): EmIO[EmileError.Bind, IpcServer] =
+  private def bindAcquire(address: IPCAddress): EmIO[EmileError.Bind, IPCServer] =
     address match
       // An empty path would encode to a zero-length name, which on Linux is autobind - a silent
-      // surprise rather than the requested bind. Reject it; IpcAddress.Autobind is the explicit way.
-      case IpcAddress.Path(p) if p.isEmpty =>
+      // surprise rather than the requested bind. Reject it; IPCAddress.Autobind is the explicit way.
+      case IPCAddress.Path(p) if p.isEmpty =>
         EffIO.fail(
-          EmileError.Bind.InvalidAddress("emile: an Ipc bind path must be non-empty; use IpcAddress.Autobind for an unnamed listener")
+          EmileError.Bind.InvalidAddress("emile: an IPC bind path must be non-empty; use IPCAddress.Autobind for an unnamed listener")
         )
       case _ =>
         EffIO.attempt(
           for
-            poller <- LibuvPollingSystem.currentPoller
-            queue <- UnboundedQueue[IO, Either[EmileError.Io, Unit]]
+            poller <- LibUVPollingSystem.currentPoller
+            queue <- UnboundedQueue[IO, Either[EmileError.IO, Unit]]
             result <- Routing.onOwner(poller)(bindInstall(poller, address, queue))
             server <- IO.fromEither(result)
           yield server,
           EmileError.Bind.Unexpected(_)
         )
 
-  private def connectRaw(address: IpcAddress): EmIO[EmileError.Connect, IpcSocket] =
+  private def connectRaw(address: IPCAddress): EmIO[EmileError.Connect, IPCSocket] =
     address match
-      case IpcAddress.Autobind =>
-        EffIO.fail(EmileError.Connect.Unexpected(new IllegalArgumentException("emile: IpcAddress.Autobind is bind-only")))
+      case IPCAddress.Autobind =>
+        EffIO.fail(EmileError.Connect.Unexpected(new IllegalArgumentException("emile: IPCAddress.Autobind is bind-only")))
       case named =>
         EffIO.attempt(
           for
-            poller <- LibuvPollingSystem.currentPoller
+            poller <- LibUVPollingSystem.currentPoller
             socket <- performConnect(poller, named)
           yield socket,
           EmileError.Connect.Unexpected(_)
         )
 
-  private def captureIpcAddresses(handle: Ptr[Byte]): Either[EmileError.Io, (Matchable, Matchable)] =
+  private def captureIpcAddresses(handle: Ptr[Byte]): Either[EmileError.IO, (Matchable, Matchable)] =
     for
-      local <- capturePipeName(LibUV.uv_pipe_getsockname, handle).left.map(IoMapping.fromCode)
-      peer <- capturePipeName(LibUV.uv_pipe_getpeername, handle).left.map(IoMapping.fromCode)
+      local <- capturePipeName(LibUV.uv_pipe_getsockname, handle).left.map(IOMapping.fromCode)
+      peer <- capturePipeName(LibUV.uv_pipe_getpeername, handle).left.map(IOMapping.fromCode)
     yield (local, peer)
 
-  private def captureConnectAddresses(handle: Ptr[Byte]): Either[EmileError.Connect, (IpcAddress, IpcAddress)] =
+  private def captureConnectAddresses(handle: Ptr[Byte]): Either[EmileError.Connect, (IPCAddress, IPCAddress)] =
     for
       local <- capturePipeName(LibUV.uv_pipe_getsockname, handle).left.map(ConnectMapping.fromCode)
       peer <- capturePipeName(LibUV.uv_pipe_getpeername, handle).left.map(ConnectMapping.fromCode)
@@ -117,10 +117,10 @@ object Ipc:
   // scalafix:off DisableSyntax
 
   private def bindInstall(
-    poller: LibuvPoller,
-    address: IpcAddress,
-    queue: UnboundedQueue[IO, Either[EmileError.Io, Unit]]
-  ): Either[EmileError.Bind, IpcServer] =
+    poller: LibUVPoller,
+    address: IPCAddress,
+    queue: UnboundedQueue[IO, Either[EmileError.IO, Unit]]
+  ): Either[EmileError.Bind, IPCServer] =
     val handle = stdlib.calloc(1.toCSize, LibUV.uv_handle_size(LibUV.UV_NAMED_PIPE))
     if handle == null then throw new OutOfMemoryError("emile: uv_pipe_t allocation failed")
     val initRc = LibUV.uv_pipe_init(poller.loop, handle, 0)
@@ -130,11 +130,11 @@ object Ipc:
     else bindAndListen(poller, handle, address, queue)
 
   private def bindAndListen(
-    poller: LibuvPoller,
+    poller: LibUVPoller,
     handle: Ptr[Byte],
-    address: IpcAddress,
-    queue: UnboundedQueue[IO, Either[EmileError.Io, Unit]]
-  ): Either[EmileError.Bind, IpcServer] =
+    address: IPCAddress,
+    queue: UnboundedQueue[IO, Either[EmileError.IO, Unit]]
+  ): Either[EmileError.Bind, IPCServer] =
     val buf = stackalloc[Byte](NameMax)
     val namelen = writeName(address, buf)
     val bindRc = LibUV.uv_pipe_bind2(handle, buf, namelen, 0.toUInt)
@@ -149,7 +149,7 @@ object Ipc:
         case Right(local) =>
           // construct stores the server in the handle's `data` slot before uv_listen activates, so a
           // connection_cb never fires on an unstored handle.
-          val server = StreamServer.construct[SocketKind.Ipc](handle, poller, local, queue, ipcAcceptor)
+          val server = StreamServer.construct[SocketKind.IPC](handle, poller, local, queue, ipcAcceptor)
           val listenRc = LibUV.uv_listen(handle, ListenBacklog, StreamServer.connectionCb)
           if listenRc != 0 then
             CallbackBridge.clear(poller, handle)
@@ -159,8 +159,8 @@ object Ipc:
     end if
   end bindAndListen
 
-  private def performConnect(poller: LibuvPoller, address: IpcAddress): IO[IpcSocket] =
-    IO.async[IpcSocket] { cb =>
+  private def performConnect(poller: LibUVPoller, address: IPCAddress): IO[IPCSocket] =
+    IO.async[IPCSocket] { cb =>
       Routing.onOwner(poller):
         val handle = stdlib.calloc(1.toCSize, LibUV.uv_handle_size(LibUV.UV_NAMED_PIPE))
         if handle == null then throw new OutOfMemoryError("emile: uv_pipe_t allocation failed")
@@ -173,10 +173,10 @@ object Ipc:
     }
 
   private def startConnect(
-    poller: LibuvPoller,
+    poller: LibUVPoller,
     handle: Ptr[Byte],
-    address: IpcAddress,
-    cb: Either[Throwable, IpcSocket] => Unit
+    address: IPCAddress,
+    cb: Either[Throwable, IPCSocket] => Unit
   ): Option[IO[Unit]] =
     val req = allocConnectReq()
     CallbackBridge.storeReq(poller, req, connectDeliver(cb, poller, handle))
@@ -200,8 +200,8 @@ object Ipc:
     if LibUV.uv_is_closing(handle) == 0 then LibUV.uv_close(handle, freeHandleCb)
 
   private def connectDeliver(
-    cb: Either[Throwable, IpcSocket] => Unit,
-    poller: LibuvPoller,
+    cb: Either[Throwable, IPCSocket] => Unit,
+    poller: LibUVPoller,
     handle: Ptr[Byte]
   ): (Int, Ptr[Byte]) => Unit =
     (status, req) =>
@@ -217,7 +217,7 @@ object Ipc:
             LibUV.uv_close(handle, freeHandleCb)
             cb(Left(error))
           case Right((local, peer)) =>
-            cb(Right(Socket.construct[SocketKind.Ipc](handle, poller, local, peer)))
+            cb(Right(Socket.construct[SocketKind.IPC](handle, poller, local, peer)))
 
   private val connectCb: LibUV.ConnectCB = (req: Ptr[Byte], status: CInt) =>
     CallbackBridge.loadReq[(Int, Ptr[Byte]) => Unit](req).apply(status, req)
@@ -228,7 +228,7 @@ object Ipc:
   private def capturePipeName(
     getter: (Ptr[Byte], CString, Ptr[CSize]) => CInt,
     handle: Ptr[Byte]
-  ): Either[Int, IpcAddress] =
+  ): Either[Int, IPCAddress] =
     val buf = stackalloc[Byte](NameMax)
     val sizeCell = stackalloc[CSize]()
     !sizeCell = NameMax.toCSize
@@ -236,21 +236,21 @@ object Ipc:
     if rc < 0 then Left(rc)
     else
       val len = (!sizeCell).toInt
-      if len == 0 then Right(IpcAddress.Path(""))
-      else if buf(0) == 0.toByte then Right(IpcAddress.Abstract(readString(buf, 1, len - 1)))
-      else Right(IpcAddress.Path(readString(buf, 0, len)))
+      if len == 0 then Right(IPCAddress.Path(""))
+      else if buf(0) == 0.toByte then Right(IPCAddress.Abstract(readString(buf, 1, len - 1)))
+      else Right(IPCAddress.Path(readString(buf, 0, len)))
 
   // Writes the bind2/connect2 wire form of `address` into `buf` and returns its byte length. Path ->
   // the path bytes (filesystem); Abstract -> a leading NUL then the name (Linux abstract namespace);
   // Autobind -> a leading NUL with zero length (Linux autobind). libuv truncates an over-long name,
   // mirrored by bounding the copy to the buffer.
-  private def writeName(address: IpcAddress, buf: Ptr[Byte]): CSize =
+  private def writeName(address: IPCAddress, buf: Ptr[Byte]): CSize =
     address match
-      case IpcAddress.Path(value) => copyBytes(value.getBytes(StandardCharsets.UTF_8), buf, 0)
-      case IpcAddress.Abstract(name) =>
+      case IPCAddress.Path(value) => copyBytes(value.getBytes(StandardCharsets.UTF_8), buf, 0)
+      case IPCAddress.Abstract(name) =>
         buf(0) = 0.toByte
         copyBytes(name.getBytes(StandardCharsets.UTF_8), buf, 1)
-      case IpcAddress.Autobind =>
+      case IPCAddress.Autobind =>
         buf(0) = 0.toByte
         0.toCSize
 
@@ -273,4 +273,4 @@ object Ipc:
 
   // scalafix:on DisableSyntax
 
-end Ipc
+end IPC

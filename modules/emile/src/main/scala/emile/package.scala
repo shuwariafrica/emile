@@ -18,4 +18,4 @@ package emile
 /** Top-level re-exports across the [[emile]] package - the curated `import emile.*` surface for
   * application code.
   */
-export EmileError.{Bind, Connect, Dns as DnsError, HostConnect, Io, Runtime}
+export EmileError.{Bind, Connect, DNS as DNSError, HostConnect, IO, Runtime}

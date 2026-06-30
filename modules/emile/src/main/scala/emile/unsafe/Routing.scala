@@ -26,7 +26,7 @@ import cats.effect.IO
 
 import emile.EmileError
 
-/** Worker-affinity routing: runs a thunk on the libuv loop thread that owns a [[LibuvPoller]], with
+/** Worker-affinity routing: runs a thunk on the libuv loop thread that owns a [[LibUVPoller]], with
   * a cancellation finaliser on the cross-thread path.
   */
 private[emile] object Routing:
@@ -40,7 +40,7 @@ private[emile] object Routing:
     * owner the node yields `Left` and the call is submitted to the loop thread, with a finaliser
     * that removes the still-queued runnable on cancellation.
     */
-  def onOwner[A](poller: LibuvPoller)(thunk: => A): IO[A] =
+  def onOwner[A](poller: LibUVPoller)(thunk: => A): IO[A] =
     IO.delay {
       if poller.isOwnerThread then Right(runOnOwner(thunk))
       else Left(())
@@ -52,7 +52,7 @@ private[emile] object Routing:
             val runnable: Runnable = () => cb(runOffOwner(thunk))
             if poller.submit(runnable) then Some(IO.delay { poller.remove(runnable): Unit; () })
             else
-              cb(Left(EmileError.Io.AlreadyClosed))
+              cb(Left(EmileError.IO.AlreadyClosed))
               None
     }
 
@@ -71,10 +71,10 @@ private[emile] object Routing:
 
   /** Close `handle` on `poller`'s loop thread, completing once libuv's close callback has fired and
     * freed the handle's C memory - the canonical release step for a libuv handle. The completion
-    * callback rides through a `(LibuvPoller, cb)` closure in the handle's `data` slot so the close
+    * callback rides through a `(LibUVPoller, cb)` closure in the handle's `data` slot so the close
     * callback can release the anchor entry before freeing the C memory.
     */
-  def closeHandle(poller: LibuvPoller, handle: Ptr[Byte]): IO[Unit] =
+  def closeHandle(poller: LibUVPoller, handle: Ptr[Byte]): IO[Unit] =
     IO.async[Unit]: cb =>
       onOwner(poller):
         CallbackBridge.store(poller, handle, new CloseCompletion(poller, cb))
@@ -82,7 +82,7 @@ private[emile] object Routing:
         None
 
   // Holder for closeHandle's completion: carries the poller (for anchor release) and the continuation.
-  final private[unsafe] class CloseCompletion(val poller: LibuvPoller, val cb: Either[Throwable, Unit] => Unit)
+  final private[unsafe] class CloseCompletion(val poller: LibUVPoller, val cb: Either[Throwable, Unit] => Unit)
 
   // uv_close callback for closeHandle: release the anchor, free the handle, then complete the release.
   private val closeHandleCb: LibUV.CloseCB = (handle: Ptr[Byte]) =>
@@ -94,7 +94,7 @@ private[emile] object Routing:
 end Routing
 
 /** Storage of a callback holder in a libuv handle's or request's `data` slot, paired with a
-  * GC-reachability anchor in the owning [[LibuvPoller.anchors]] map.
+  * GC-reachability anchor in the owning [[LibUVPoller.anchors]] map.
   * `Intrinsics.castObjectToRawPtr` is a pure reinterpretation, so without the anchor a stored
   * holder is collectible the moment its last Scala-side reference goes out of scope - cf.
   * cats-effect `EpollSystem`'s `handles` map. [[clear]] / [[releaseReq]] remove the anchor when the
@@ -104,7 +104,7 @@ end Routing
 private[emile] object CallbackBridge:
 
   /** Store `holder` in `handle`'s `uv_handle->data` slot and anchor it in `poller.anchors`. */
-  inline def store(poller: LibuvPoller, handle: Ptr[Byte], holder: AnyRef): Unit =
+  inline def store(poller: LibUVPoller, handle: Ptr[Byte], holder: AnyRef): Unit =
     poller.anchors.put(addrOf(handle), holder): Unit
     LibUV.uv_handle_set_data(handle, fromRawPtr[Byte](Intrinsics.castObjectToRawPtr(holder)))
 
@@ -114,14 +114,14 @@ private[emile] object CallbackBridge:
     Intrinsics.castRawPtrToObject(toRawPtr(LibUV.uv_handle_get_data(handle))).asInstanceOf[H] // scalafix:ok
 
   /** Clear `handle`'s `data` slot and release its anchor entry. */
-  inline def clear(poller: LibuvPoller, handle: Ptr[Byte]): Unit =
+  inline def clear(poller: LibUVPoller, handle: Ptr[Byte]): Unit =
     poller.anchors.remove(addrOf(handle)): Unit
     LibUV.uv_handle_set_data(handle, fromRawPtr[Byte](Intrinsics.castLongToRawPtr(0L)))
 
   /** Store `holder` in `req`'s `uv_req->data` slot, anchor it in `poller.anchors`, and record the
     * request in `poller.outstandingReqs` so `close()` can cancel it.
     */
-  inline def storeReq(poller: LibuvPoller, req: Ptr[Byte], holder: AnyRef): Unit =
+  inline def storeReq(poller: LibUVPoller, req: Ptr[Byte], holder: AnyRef): Unit =
     poller.anchors.put(addrOf(req), holder): Unit
     poller.outstandingReqs.put(addrOf(req), req): Unit
     LibUV.uv_req_set_data(req, fromRawPtr[Byte](Intrinsics.castObjectToRawPtr(holder)))
@@ -130,7 +130,7 @@ private[emile] object CallbackBridge:
     * [[storeReq]]; the request's `data` slot is freed alongside the request itself, so no slot
     * null-out is needed.
     */
-  inline def releaseReq(poller: LibuvPoller, req: Ptr[Byte]): Unit =
+  inline def releaseReq(poller: LibUVPoller, req: Ptr[Byte]): Unit =
     poller.anchors.remove(addrOf(req)): Unit
     poller.outstandingReqs.remove(addrOf(req)): Unit
 

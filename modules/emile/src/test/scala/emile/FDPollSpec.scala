@@ -23,14 +23,14 @@ import scala.scalanative.unsigned.*
 import cats.effect.IO
 import cats.effect.Resource
 
-/** Covers [[FdPoll]]: await reports a descriptor that has become readable. */
-final class FdPollSpec extends EmileSuite:
+/** Covers [[FDPoll]]: await reports a descriptor that has become readable. */
+final class FDPollSpec extends EmileSuite:
 
   test("await fires Readable when the pipe becomes readable") {
     pipeResource.use: (readFd, writeFd) =>
-      val poll = FdPoll.resource(readFd, Set(FdEvent.Readable)).use(_.await).absolve
+      val poll = FDPoll.resource(readFd, Set(FDEvent.Readable)).use(_.await).absolve
       val write = IO.sleep(100.millis) *> IO(writeByte(writeFd))
-      poll.both(write).timeout(5.seconds).map((events, _) => assert(events.contains(FdEvent.Readable)))
+      poll.both(write).timeout(5.seconds).map((events, _) => assert(events.contains(FDEvent.Readable)))
   }
 
   private def writeByte(fd: Int): Unit =
@@ -50,4 +50,4 @@ final class FdPollSpec extends EmileSuite:
     unistd.close(readFd): Unit
     unistd.close(writeFd): Unit
 
-end FdPollSpec
+end FDPollSpec

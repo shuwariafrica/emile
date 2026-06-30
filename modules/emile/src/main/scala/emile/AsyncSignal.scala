@@ -27,12 +27,12 @@ import fs2.Stream
 
 import emile.unsafe.CallbackBridge
 import emile.unsafe.LibUV
-import emile.unsafe.LibuvPoller
+import emile.unsafe.LibUVPoller
 import emile.unsafe.Routing
 
 final private class AsyncSignalState(
   val handle: Ptr[Byte],
-  val poller: LibuvPoller,
+  val poller: LibUVPoller,
   val wakeups: UnboundedQueue[IO, Unit]
 )
 
@@ -47,8 +47,8 @@ object AsyncSignal:
   /** A scoped `uv_async_t`. The handle is created on - and closed back on - the loop of the worker
     * the resource is acquired on.
     */
-  def resource: EmResource[EmileError.Io, AsyncSignal] =
-    Resource.make[EffIO.Of[EmileError.Io], AsyncSignal](acquire)(release)
+  def resource: EmResource[EmileError.IO, AsyncSignal] =
+    Resource.make[EffIO.Of[EmileError.IO], AsyncSignal](acquire)(release)
 
   given CanEqual[AsyncSignal, AsyncSignal] = CanEqual.derived
 
@@ -56,36 +56,36 @@ object AsyncSignal:
     /** Wakes the owning loop; thread-safe and callable from any thread, as `uv_async_send` is
       * libuv's cross-thread primitive.
       */
-    def fire: EmIO[EmileError.Io, Unit] =
+    def fire: EmIO[EmileError.IO, Unit] =
       EffIO.suspend(LibUV.uv_async_send(signal.handle): Unit)
 
     /** A stream of wake-ups. libuv coalesces `uv_async_send`, so N fires may surface as M (<= N)
       * elements - an edge-triggered signal, not a counter.
       */
-    def fires: EmStream[EmileError.Io, Unit] =
+    def fires: EmStream[EmileError.IO, Unit] =
       Stream.repeatEval(signal.wakeups.take).translate(EffIO.liftK)
 
-  private def acquire: EmIO[EmileError.Io, AsyncSignal] =
+  private def acquire: EmIO[EmileError.IO, AsyncSignal] =
     EffIO.lift:
       for
-        poller <- LibuvPollingSystem.currentPoller
+        poller <- LibUVPollingSystem.currentPoller
         wakeups <- UnboundedQueue[IO, Unit]
         handle <- IO(allocHandle())
         result <- Routing.onOwner(poller)(install(poller, handle, wakeups))
       yield result
 
-  private def release(signal: AsyncSignal): EmIO[EmileError.Io, Unit] =
+  private def release(signal: AsyncSignal): EmIO[EmileError.IO, Unit] =
     EffIO.liftF(Routing.closeHandle(signal.poller, signal.handle))
 
   private def install(
-    poller: LibuvPoller,
+    poller: LibUVPoller,
     handle: Ptr[Byte],
     wakeups: UnboundedQueue[IO, Unit]
-  ): Either[EmileError.Io, AsyncSignal] =
+  ): Either[EmileError.IO, AsyncSignal] =
     val rc = LibUV.uv_async_init(poller.loop, handle, asyncCb)
     if rc != 0 then
       stdlib.free(handle)
-      Left(IoMapping.fromCode(rc))
+      Left(IOMapping.fromCode(rc))
     else
       val state = new AsyncSignalState(handle, poller, wakeups)
       CallbackBridge.store(poller, handle, state)

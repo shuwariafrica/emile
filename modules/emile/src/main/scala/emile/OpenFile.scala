@@ -28,10 +28,10 @@ import fs2.Stream
 
 import emile.unsafe.CallbackBridge
 import emile.unsafe.LibUV
-import emile.unsafe.LibuvPoller
+import emile.unsafe.LibUVPoller
 import emile.unsafe.Routing
 
-final private class OpenFileState(val file: Int, val poller: LibuvPoller)
+final private class OpenFileState(val file: Int, val poller: LibUVPoller)
 
 /** A file open for reading, backed by a libuv `uv_file`. Acquired through [[OpenFile$ OpenFile]];
   * the descriptor is closed when the resource releases.
@@ -44,8 +44,8 @@ object OpenFile:
   /** Opens `path` for reading. The descriptor is closed when the resource releases; while open the
     * same file may serve repeated reads.
     */
-  def open(path: Path): EmResource[EmileError.Io, OpenFile] =
-    Resource.makeFull[EffIO.Of[EmileError.Io], OpenFile](poll => poll(acquire(path)))(release)
+  def open(path: Path): EmResource[EmileError.IO, OpenFile] =
+    Resource.makeFull[EffIO.Of[EmileError.IO], OpenFile](poll => poll(acquire(path)))(release)
 
   given CanEqual[OpenFile, OpenFile] = CanEqual.derived
 
@@ -54,38 +54,38 @@ object OpenFile:
 
   extension (file: OpenFile)
     /** The file's size in bytes. */
-    def size: EmIO[EmileError.Io, Long] =
-      EffIO.attempt(statSize(file), EmileError.Io.Unexpected(_))
+    def size: EmIO[EmileError.IO, Long] =
+      EffIO.attempt(statSize(file), EmileError.IO.Unexpected(_))
 
     /** Read up to `maxBytes` from the current position, advancing it; `None` at end of file. */
-    def read(maxBytes: Int): EmIO[EmileError.Io, Option[Chunk[Byte]]] =
+    def read(maxBytes: Int): EmIO[EmileError.IO, Option[Chunk[Byte]]] =
       readOnce(file, maxBytes)
 
     /** The file's bytes from the current position as a stream - the backpressure-correct large-body
       * source for `file.reads.through(socket.writes)`.
       */
-    def reads: EmStream[EmileError.Io, Byte] =
+    def reads: EmStream[EmileError.IO, Byte] =
       Stream.repeatEval(readOnce(file, DefaultReadSize)).unNoneTerminate.unchunks
 
   /** The underlying `uv_file` descriptor - for `uv_fs_sendfile`. */
   private[emile] def descriptor(file: OpenFile): Int = file.file
 
   /** The owning loop's poller - for `uv_fs_sendfile`'s loop routing. */
-  private[emile] def owner(file: OpenFile): LibuvPoller = file.poller
+  private[emile] def owner(file: OpenFile): LibUVPoller = file.poller
 
-  private def acquire(path: Path): EmIO[EmileError.Io, OpenFile] =
+  private def acquire(path: Path): EmIO[EmileError.IO, OpenFile] =
     EffIO
-      .liftF(LibuvPollingSystem.currentPoller)
+      .liftF(LibUVPollingSystem.currentPoller)
       .flatMap: poller =>
         EffIO
-          .attempt(openFile(poller, path), EmileError.Io.Unexpected(_))
+          .attempt(openFile(poller, path), EmileError.IO.Unexpected(_))
           .map(new OpenFileState(_, poller))
 
-  private def release(file: OpenFile): EmIO[EmileError.Io, Unit] =
+  private def release(file: OpenFile): EmIO[EmileError.IO, Unit] =
     EffIO.liftF(closeFile(file))
 
   // uv_fs_open for reading; the request result delivered by the callback is the uv_file descriptor.
-  private def openFile(poller: LibuvPoller, path: Path): IO[Int] =
+  private def openFile(poller: LibUVPoller, path: Path): IO[Int] =
     IO.async[Int]: cb =>
       Routing.onOwner(poller):
         val req = allocRequest()
@@ -111,8 +111,8 @@ object OpenFile:
           CallbackBridge.storeReq(file.poller, req, statDeliver(file.poller, cb))
           Some(Routing.onOwner(file.poller)(LibUV.uv_cancel(req): Unit))
 
-  private def readOnce(file: OpenFile, maxBytes: Int): EmIO[EmileError.Io, Option[Chunk[Byte]]] =
-    EffIO.attempt(readFile(file, maxBytes), EmileError.Io.Unexpected(_))
+  private def readOnce(file: OpenFile, maxBytes: Int): EmIO[EmileError.IO, Option[Chunk[Byte]]] =
+    EffIO.attempt(readFile(file, maxBytes), EmileError.IO.Unexpected(_))
 
   // The per-read buffer is freed in readDeliver on every path: uv_cancel only stops a still-queued
   // read, so one a threadpool worker has already begun still runs to completion and must reclaim it.
@@ -145,42 +145,42 @@ object OpenFile:
         else CallbackBridge.storeReq(file.poller, req, closeDeliver(file.poller, cb))
         None
 
-  private def startOpen(poller: LibuvPoller, req: Ptr[Byte], path: Path): Int =
+  private def startOpen(poller: LibUVPoller, req: Ptr[Byte], path: Path): Int =
     Zone(LibUV.uv_fs_open(poller.loop, req, toCString(path.toString), LibUV.UV_FS_O_RDONLY, 0, fsCb))
 
   // Synchronous uv_fs_* failure: it occurs before storeReq, so there is no anchor to release - just
   // clean up the request and fail the callback.
   private def failRequest[A](req: Ptr[Byte], cb: Either[Throwable, A] => Unit, rc: Int): Unit =
     cleanupRequest(req)
-    cb(Left(IoMapping.fromCode(rc)))
+    cb(Left(IOMapping.fromCode(rc)))
 
-  private def openDeliver(poller: LibuvPoller, cb: Either[Throwable, Int] => Unit): Ptr[Byte] => Unit =
+  private def openDeliver(poller: LibUVPoller, cb: Either[Throwable, Int] => Unit): Ptr[Byte] => Unit =
     req =>
       val result = LibUV.uv_fs_get_result(req).toInt
       CallbackBridge.releaseReq(poller, req)
       cleanupRequest(req)
-      if result < 0 then cb(Left(IoMapping.fromCode(result)))
+      if result < 0 then cb(Left(IOMapping.fromCode(result)))
       else cb(Right(result))
 
-  private def statDeliver(poller: LibuvPoller, cb: Either[Throwable, Long] => Unit): Ptr[Byte] => Unit =
+  private def statDeliver(poller: LibUVPoller, cb: Either[Throwable, Long] => Unit): Ptr[Byte] => Unit =
     req =>
       val result = LibUV.uv_fs_get_result(req).toInt
-      val outcome: Either[EmileError.Io, Long] =
-        if result < 0 then Left(IoMapping.fromCode(result))
+      val outcome: Either[EmileError.IO, Long] =
+        if result < 0 then Left(IOMapping.fromCode(result))
         else Right(LibUV.uv_fs_get_statbuf(req)._8.toLong)
       CallbackBridge.releaseReq(poller, req)
       cleanupRequest(req)
       cb(outcome)
 
   private def readDeliver(
-    poller: LibuvPoller,
+    poller: LibUVPoller,
     cb: Either[Throwable, Option[Chunk[Byte]]] => Unit,
     buf: Ptr[Byte]
   ): Ptr[Byte] => Unit =
     req =>
       val result = LibUV.uv_fs_get_result(req).toInt
-      val outcome: Either[EmileError.Io, Option[Chunk[Byte]]] =
-        if result < 0 then Left(IoMapping.fromCode(result))
+      val outcome: Either[EmileError.IO, Option[Chunk[Byte]]] =
+        if result < 0 then Left(IOMapping.fromCode(result))
         else if result == 0 then Right(None)
         else Right(Some(Chunk.fromBytePtr(buf, result)))
       stdlib.free(buf)
@@ -188,7 +188,7 @@ object OpenFile:
       cleanupRequest(req)
       cb(outcome)
 
-  private def closeDeliver(poller: LibuvPoller, cb: Either[Throwable, Unit] => Unit): Ptr[Byte] => Unit =
+  private def closeDeliver(poller: LibUVPoller, cb: Either[Throwable, Unit] => Unit): Ptr[Byte] => Unit =
     req =>
       CallbackBridge.releaseReq(poller, req)
       cleanupRequest(req)
@@ -212,6 +212,6 @@ object OpenFile:
   // scalafix:on DisableSyntax
 
   // uv_fs_cb: run the per-request delivery closure stored in the request's data slot.
-  private val fsCb: LibUV.FsCB = (req: Ptr[Byte]) => CallbackBridge.loadReq[Ptr[Byte] => Unit](req).apply(req)
+  private val fsCb: LibUV.FSCB = (req: Ptr[Byte]) => CallbackBridge.loadReq[Ptr[Byte] => Unit](req).apply(req)
 
 end OpenFile

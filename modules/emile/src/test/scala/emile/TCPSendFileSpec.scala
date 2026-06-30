@@ -32,7 +32,7 @@ import com.comcast.ip4s.SocketAddress
 /** Covers a server streaming a temp file to the peer two ways: [[Socket.sendFile]] (kernel
   * `uv_fs_sendfile`) and the backpressure-correct `OpenFile.reads.through(socket.writes)`.
   */
-final class TcpSendFileSpec extends EmileSuite:
+final class TCPSendFileSpec extends EmileSuite:
 
   private val anyLoopback: SocketAddress[IpAddress] =
     SocketAddress(Ipv4Address.fromString("127.0.0.1").get, Port.fromInt(0).get)
@@ -40,7 +40,7 @@ final class TcpSendFileSpec extends EmileSuite:
   test("sendFile transfers the file content to the peer") {
     val content: Array[Byte] = "emile sendFile probe payload".getBytes("UTF-8")
     val program: IO[Unit] =
-      Tcp
+      TCP
         .bind(anyLoopback)
         .widen[EmileError]
         .use(server => EffIO.liftF(sendFileRoundTrip(server, content)))
@@ -51,7 +51,7 @@ final class TcpSendFileSpec extends EmileSuite:
   test("OpenFile.reads through a socket's writes streams the file body to the peer") {
     val content: Array[Byte] = "emile reads-through-writes whole-body probe payload".getBytes("UTF-8")
     val program: IO[Unit] =
-      Tcp
+      TCP
         .bind(anyLoopback)
         .widen[EmileError]
         .use(server => EffIO.liftF(readsThroughRoundTrip(server, content)))
@@ -59,10 +59,10 @@ final class TcpSendFileSpec extends EmileSuite:
     program.timeout(5.seconds)
   }
 
-  private def sendFileRoundTrip(server: TcpServer, content: Array[Byte]): IO[Unit] =
+  private def sendFileRoundTrip(server: TCPServer, content: Array[Byte]): IO[Unit] =
     tempFile(content).use(path => sendFileEcho(server, path, content))
 
-  private def sendFileEcho(server: TcpServer, path: Path, content: Array[Byte]): IO[Unit] =
+  private def sendFileEcho(server: TCPServer, path: Path, content: Array[Byte]): IO[Unit] =
     val srvWork: IO[Unit] =
       OpenFile
         .open(path)
@@ -77,7 +77,7 @@ final class TcpSendFileSpec extends EmileSuite:
         .absolve
 
     val cliWork: IO[Unit] =
-      Tcp
+      TCP
         .connect(server.address)
         .widen[EmileError]
         .use(socket =>
@@ -93,10 +93,10 @@ final class TcpSendFileSpec extends EmileSuite:
     srvWork.background.use(_ => cliWork)
   end sendFileEcho
 
-  private def readsThroughRoundTrip(server: TcpServer, content: Array[Byte]): IO[Unit] =
+  private def readsThroughRoundTrip(server: TCPServer, content: Array[Byte]): IO[Unit] =
     tempFile(content).use(path => readsThroughEcho(server, path, content))
 
-  private def readsThroughEcho(server: TcpServer, path: Path, content: Array[Byte]): IO[Unit] =
+  private def readsThroughEcho(server: TCPServer, path: Path, content: Array[Byte]): IO[Unit] =
     val srvWork: IO[Unit] =
       OpenFile
         .open(path)
@@ -111,7 +111,7 @@ final class TcpSendFileSpec extends EmileSuite:
         .absolve
 
     val cliWork: IO[Unit] =
-      Tcp
+      TCP
         .connect(server.address)
         .widen[EmileError]
         .use(socket =>
@@ -131,7 +131,7 @@ final class TcpSendFileSpec extends EmileSuite:
     val content: Array[Byte] = "emile conflict probe".getBytes("UTF-8")
     tempFile(content)
       .use(path =>
-        Tcp
+        TCP
           .bind(anyLoopback)
           .widen[EmileError]
           .use(server => EffIO.liftF(conflictEcho(server, path, content)))
@@ -140,7 +140,7 @@ final class TcpSendFileSpec extends EmileSuite:
       .timeout(10.seconds)
   }
 
-  private def conflictEcho(server: TcpServer, path: Path, content: Array[Byte]): IO[Unit] =
+  private def conflictEcho(server: TCPServer, path: Path, content: Array[Byte]): IO[Unit] =
     // A payload far larger than the socket buffers, sent to a peer that never reads, keeps the uv_write
     // in flight (its callback fires only once every byte drains), so a concurrent sendFile observes it.
     val big: Chunk[Byte] = Chunk.array(new Array[Byte](32 * 1024 * 1024))
@@ -148,7 +148,7 @@ final class TcpSendFileSpec extends EmileSuite:
       server.accepted.evalMap(_.use(_ => EffIO.liftF(IO.sleep(3.seconds)))).head.compile.drain.absolve
 
     val cliWork: IO[Unit] =
-      Tcp
+      TCP
         .connect(server.address)
         .widen[EmileError]
         .use(socket =>
@@ -163,7 +163,7 @@ final class TcpSendFileSpec extends EmileSuite:
                   result <- socket.sendFile(file, 0L, content.length.toLong).either
                   _ <- writer.cancel
                   _ <- IO(result match
-                         case Left(EmileError.Io.ConflictingTransfer) => ()
+                         case Left(EmileError.IO.ConflictingTransfer) => ()
                          case other => fail(s"expected ConflictingTransfer, got: $other"))
                 yield ()
               )
@@ -178,7 +178,7 @@ final class TcpSendFileSpec extends EmileSuite:
     val content: Array[Byte] = "emile half-close conflict probe".getBytes("UTF-8")
     tempFile(content)
       .use(path =>
-        Tcp
+        TCP
           .bind(anyLoopback)
           .widen[EmileError]
           .use(server => EffIO.liftF(halfCloseConflictEcho(server, path, content)))
@@ -187,7 +187,7 @@ final class TcpSendFileSpec extends EmileSuite:
       .timeout(10.seconds)
   }
 
-  private def halfCloseConflictEcho(server: TcpServer, path: Path, content: Array[Byte]): IO[Unit] =
+  private def halfCloseConflictEcho(server: TCPServer, path: Path, content: Array[Byte]): IO[Unit] =
     // The server holds the connection open so the client's half-close, then sendFile, both run against a
     // live peer. endOfOutput's FIN would truncate a raw-fd sendFile, so the half-close terminally excludes
     // it: a later sendFile must fail fast rather than send bytes after the FIN.
@@ -195,7 +195,7 @@ final class TcpSendFileSpec extends EmileSuite:
       server.accepted.evalMap(_.use(_ => EffIO.liftF(IO.sleep(2.seconds)))).head.compile.drain.absolve
 
     val cliWork: IO[Unit] =
-      Tcp
+      TCP
         .connect(server.address)
         .widen[EmileError]
         .use(socket =>
@@ -208,7 +208,7 @@ final class TcpSendFileSpec extends EmileSuite:
                   _ <- socket.endOfOutput.absolve
                   result <- socket.sendFile(file, 0L, content.length.toLong).either
                   _ <- IO(result match
-                         case Left(EmileError.Io.ConflictingTransfer) => ()
+                         case Left(EmileError.IO.ConflictingTransfer) => ()
                          case other => fail(s"expected ConflictingTransfer, got: $other"))
                 yield ()
               )
@@ -229,4 +229,4 @@ final class TcpSendFileSpec extends EmileSuite:
     finally out.close()
     file
 
-end TcpSendFileSpec
+end TCPSendFileSpec

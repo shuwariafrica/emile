@@ -9,7 +9,7 @@ import emile.*
 object EchoServer extends EmileIOApp.Simple:
   def runEff: EmIO[EmileError, Unit] =
     val addr = SocketAddress(ipv4"0.0.0.0", port"8080")
-    Tcp.bind(addr, TcpOptions.server).widen[EmileError].use: server =>
+    TCP.bind(addr, TCPOptions.server).widen[EmileError].use: server =>
       server.accepted
         .parEvalMapUnordered(4096): connection =>
           connection.use(socket => socket.reads.through(socket.writes).compile.drain)
@@ -29,7 +29,7 @@ It is **Native-first**: the public API is shaped for the Scala Native representa
 | Module      | Artifact                        | Purpose                                                                                                            |
 |-------------|---------------------------------|--------------------------------------------------------------------------------------------------------------------|
 | `emile`     | `io.github.arashi01::emile`     | Core library: bootstrap, TCP, IPC (Unix-domain sockets), DNS, timers, signals, files, fd-polling.                  |
-| `emile-fs2` | `io.github.arashi01::emile-fs2` | fs2-networking interop: `TcpSocket.asFs2` / `TcpServer.acceptFs2` adapters onto `fs2.io.net.Socket[IO]`. Optional. |
+| `emile-fs2` | `io.github.arashi01::emile-fs2` | fs2-networking interop: `TCPSocket.asFs2` / `TCPServer.acceptFs2` adapters onto `fs2.io.net.Socket[IO]`. Optional. |
 
 ```scala
 // build.sbt (sbt 2.x)
@@ -70,17 +70,17 @@ import emile.*
 
 // Server: bind + listen completes synchronously inside resource acquisition; any failure
 // surfaces here, never later mid-stream.
-Tcp.bind(SocketAddress(ipv4"0.0.0.0", port"8080"), TcpOptions.server).use: server =>
+TCP.bind(SocketAddress(ipv4"0.0.0.0", port"8080"), TCPOptions.server).use: server =>
   // each accepted socket's lifetime is the handler's `use` scope - safe under every combinator.
   server.accepted.evalMap(_.use(handle)).compile.drain                  // serial
   server.accepted.parEvalMapUnordered(256)(_.use(handle)).compile.drain // unordered concurrency
 
 // Client: connect to an address ...
-Tcp.connect(SocketAddress(ipv4"127.0.0.1", port"8080")).use: socket =>
+TCP.connect(SocketAddress(ipv4"127.0.0.1", port"8080")).use: socket =>
   socket.write(Chunk.array("ping".getBytes("UTF-8"))) >> socket.read(4096)
 
 // ... or resolve and connect by hostname (serial attempts in resolver order).
-Tcp.connect(host"example.com", port"443").use(socket => ???)
+TCP.connect(host"example.com", port"443").use(socket => ???)
 ```
 
 A connected socket offers five read methods across two axes - one-shot vs persistent, copying vs zero-copy:
@@ -108,19 +108,19 @@ alongside its read trampoline.
 import emile.*
 
 // Server on the Linux abstract namespace - no filesystem entry, nothing to clean up.
-Ipc.bind(IpcAddress.Abstract("my-service")).use: server =>
+IPC.bind(IPCAddress.Abstract("my-service")).use: server =>
   server.accepted.parEvalMapUnordered(64)(_.use(handle)).compile.drain
 
 // Client.
-Ipc.connect(IpcAddress.Abstract("my-service")).use: socket =>
+IPC.connect(IPCAddress.Abstract("my-service")).use: socket =>
   socket.write(Chunk.array("ping".getBytes("UTF-8"))) >> socket.read(4096)
 ```
 
-`Ipc` mirrors `Tcp`: a bound `IpcServer` yields the same `accepted` stream, and an `IpcSocket` shares the byte-stream
+`IPC` mirrors `TCP`: a bound `IPCServer` yields the same `accepted` stream, and an `IPCSocket` shares the byte-stream
 surface documented under [TCP](#tcp) (`reads`, `writes`, `read`, `sendFile`, the half-closes). The address is an
-`IpcAddress` rather than an IP one:
+`IPCAddress` rather than an IP one:
 
-| `IpcAddress`     | Meaning                                                                                  |
+| `IPCAddress`     | Meaning                                                                                  |
 |------------------|------------------------------------------------------------------------------------------|
 | `Path(value)`    | a filesystem socket file - libuv removes it on close                                     |
 | `Abstract(name)` | a Linux abstract-namespace name - no filesystem entry, no residue                        |
@@ -129,8 +129,8 @@ surface documented under [TCP](#tcp) (`reads`, `writes`, `read`, `sendFile`, the
 Two operations are IPC-only:
 
 ```scala
-socket.peerCredentials          // EmIO[EmileError.Io, PeerCredentials] - the peer's (processId, userId, groupId)
-server.chmod(IpcMode.ReadWrite) // EmIO[EmileError.Io, Unit] - set the socket file's access mode
+socket.peerCredentials          // EmIO[EmileError.IO, PeerCredentials] - the peer's (processId, userId, groupId)
+server.chmod(IPCMode.ReadWrite) // EmIO[EmileError.IO, Unit] - set the socket file's access mode
 ```
 
 `peerCredentials` reads the connected peer through `SO_PEERCRED`, for a server to authorise a local client. `chmod`
@@ -139,7 +139,7 @@ local users.
 
 ### Timer
 
-`Timer.after(delay)` is a cancelable `IO.sleep` driven by cats-effect's per-worker `TimerHeap`; `LibuvPollingSystem`
+`Timer.after(delay)` is a cancelable `IO.sleep` driven by cats-effect's per-worker `TimerHeap`; `LibUVPollingSystem`
 arms a `uv_timer_t` to bound each loop iteration's wait, so sleeps fire on time. `Timer.interval(period)` is a
 `fs2.Stream.fixedRate`.
 
@@ -166,19 +166,19 @@ edge-triggered wake-up, not a counter.
 ```scala
 import com.comcast.ip4s.*
 
-Dns.resolve(host"example.com", port"443"): EmIO[EmileError.Dns, NonEmptyList[SocketAddress[IpAddress]]]
-Dns.resolve(host"example.com"):             EmIO[EmileError.Dns, NonEmptyList[IpAddress]]
-Dns.reverse(ip"127.0.0.1"):                  EmIO[EmileError.Dns, Hostname]
+DNS.resolve(host"example.com", port"443"): EmIO[EmileError.DNS, NonEmptyList[SocketAddress[IpAddress]]]
+DNS.resolve(host"example.com"):             EmIO[EmileError.DNS, NonEmptyList[IpAddress]]
+DNS.reverse(ip"127.0.0.1"):                  EmIO[EmileError.DNS, Hostname]
 ```
 
 emile deliberately does not publish a `given com.comcast.ip4s.Dns[IO]`: ip4s seals that abstraction. Code reaching for
 `host.resolve[IO]` uses ip4s's own platform-resolver instance; emile's libuv resolver is reached through these calls,
-which also carry the typed `EmileError.Dns` channel.
+which also carry the typed `EmileError.DNS` channel.
 
-### FdPoll
+### FDPoll
 
 ```scala
-FdPoll.resource(fd, Set(FdEvent.Readable, FdEvent.Disconnect)).use: poll =>
+FDPoll.resource(fd, Set(FDEvent.Readable, FDEvent.Disconnect)).use: poll =>
   poll.await.flatMap(events => ???)
 ```
 
@@ -188,9 +188,9 @@ Backed by `uv_poll_t` - one-shot readiness on a foreign file descriptor.
 
 ```scala
 OpenFile.open(java.nio.file.Path.of("payload.bin")).use: file =>
-  file.read(65536)  // EmIO[EmileError.Io, Option[Chunk[Byte]]] - advances the position; None at EOF
-  file.reads        // EmStream[EmileError.Io, Byte] - the whole file from the current position
-  file.size         // EmIO[EmileError.Io, Long]
+  file.read(65536)  // EmIO[EmileError.IO, Option[Chunk[Byte]]] - advances the position; None at EOF
+  file.reads        // EmStream[EmileError.IO, Byte] - the whole file from the current position
+  file.size         // EmIO[EmileError.IO, Long]
 ```
 
 `OpenFile` wraps a read-only `uv_file`; the descriptor closes when the Resource releases, and one open file may serve
@@ -204,7 +204,7 @@ socket.sendFile(file, 0L, size)    // single uv_fs_sendfile syscall, zero-copy, 
 `sendFile` is a single `uv_fs_sendfile` syscall: it returns the bytes actually sent, which may be fewer than `length`
 (0 when the socket send buffer is full). It writes the raw descriptor outside libuv's write queue, so it must not
 overlap an in-flight `write` or an `endOfOutput` half-close on the same socket - a concurrent one fails fast with
-`EmileError.Io.ConflictingTransfer`. For a complete, backpressured body, prefer `file.reads.through(socket.writes)`.
+`EmileError.IO.ConflictingTransfer`. For a complete, backpressured body, prefer `file.reads.through(socket.writes)`.
 
 ## Typed errors as values
 
@@ -212,13 +212,13 @@ emile's effect alias is `EmIO[+E, +A] = boilerplate.effect.EffIO[E, A] = IO[Eith
 `A`. Every fallible operation publishes its precise error type:
 
 ```scala
-def bind(addr: SocketAddress[IpAddress]): EmResource[EmileError.Bind, TcpServer]
-def connect(addr: SocketAddress[IpAddress]): EmResource[EmileError.Connect, TcpSocket]
-def connect(host: Host, port: Port): EmResource[EmileError.HostConnect, TcpSocket]
-def read(maxBytes: Int): EmIO[EmileError.Io, Option[Chunk[Byte]]]
+def bind(addr: SocketAddress[IpAddress]): EmResource[EmileError.Bind, TCPServer]
+def connect(addr: SocketAddress[IpAddress]): EmResource[EmileError.Connect, TCPSocket]
+def connect(host: Host, port: Port): EmResource[EmileError.HostConnect, TCPSocket]
+def read(maxBytes: Int): EmIO[EmileError.IO, Option[Chunk[Byte]]]
 ```
 
-`EmileError` is a sealed hierarchy with sub-traits per operation family (`Bind`, `Connect`, `Dns`, `Io`, `HostConnect`,
+`EmileError` is a sealed hierarchy with sub-traits per operation family (`Bind`, `Connect`, `DNS`, `IO`, `HostConnect`,
 `Runtime`); each carries named domain cases plus a `System(code: ErrorCode)` for unanticipated libuv codes and an
 `Unexpected(cause: Throwable)` for non-`EmileError` defects. `EmileError <: Exception`, so projecting onto plain `IO`'s
 `Throwable` channel via `.absolve` is lossless - the carried value remains pattern-matchable.
@@ -254,7 +254,7 @@ adapters:
 import emile.*
 import emile.Fs2Interop.*
 
-socket.asFs2: fs2.io.net.Socket[IO]                                  // a TcpSocket as fs2's Socket
+socket.asFs2: fs2.io.net.Socket[IO]                                  // a TCPSocket as fs2's Socket
 server.acceptFs2: fs2.Stream[IO, fs2.io.net.Socket[IO]]              // accept stream onto IO
 ```
 

@@ -33,11 +33,11 @@ final class OpenFileSpec extends EmileSuite:
       OpenFile.open(path).use(_.size).absolve.assertEquals(content.length.toLong)
   }
 
-  test("open of a missing path fails with a typed Io error") {
+  test("open of a missing path fails with a typed IO error") {
     val missingPath = Path.of(s"/tmp/emile-test-missing-${System.nanoTime}")
     OpenFile.open(missingPath).use(_.size).either.map {
-      case Left(_: EmileError.Io) => ()
-      case other => fail(s"expected EmileError.Io, got: $other")
+      case Left(_: EmileError.IO) => ()
+      case other => fail(s"expected EmileError.IO, got: $other")
     }
   }
 

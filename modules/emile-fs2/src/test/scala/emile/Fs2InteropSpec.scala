@@ -28,7 +28,7 @@ import com.comcast.ip4s.SocketAddress
 
 import emile.Fs2Interop.*
 
-/** Covers [[Fs2Interop.asFs2]] and [[Fs2Interop.acceptFs2]]: an emile [[TcpSocket]] / [[TcpServer]]
+/** Covers [[Fs2Interop.asFs2]] and [[Fs2Interop.acceptFs2]]: an emile [[TCPSocket]] / [[TCPServer]]
   * adapts to `fs2.io.net.Socket[IO]` / `Stream[IO, Socket[IO]]` and round-trips a payload through
   * fs2's typed-`IO` API on both sides.
   */
@@ -39,7 +39,7 @@ final class Fs2InteropSpec extends Fs2EmileSuite:
 
   test("asFs2 + acceptFs2 round-trip a payload through fs2's Socket[IO] API on both sides") {
     val payload: Chunk[Byte] = Chunk.array("emile-fs2-interop".getBytes("UTF-8"))
-    Tcp
+    TCP
       .bind(anyLoopback)
       .widen[EmileError]
       .use(server => EffIO.liftF(fs2RoundTrip(server, payload)))
@@ -48,12 +48,12 @@ final class Fs2InteropSpec extends Fs2EmileSuite:
   }
 
   test("setOption(SO_KEEPALIVE, true) succeeds via the emile keep-alive setter") {
-    Tcp
+    TCP
       .bind(anyLoopback)
       .widen[EmileError]
       .use(server =>
         EffIO.liftF(
-          Tcp
+          TCP
             .connect(server.address)
             .widen[EmileError]
             .use(socket => EffIO.liftF(socket.asFs2.setOption(StandardSocketOptions.SO_KEEPALIVE, java.lang.Boolean.TRUE)))
@@ -65,12 +65,12 @@ final class Fs2InteropSpec extends Fs2EmileSuite:
   }
 
   test("setOption with an unsupported key raises IllegalArgumentException on the Throwable channel") {
-    Tcp
+    TCP
       .bind(anyLoopback)
       .widen[EmileError]
       .use(server =>
         EffIO.liftF(
-          Tcp
+          TCP
             .connect(server.address)
             .widen[EmileError]
             .use(socket =>
@@ -91,7 +91,7 @@ final class Fs2InteropSpec extends Fs2EmileSuite:
       .timeout(5.seconds)
   }
 
-  private def fs2RoundTrip(server: TcpServer, payload: Chunk[Byte]): IO[Unit] =
+  private def fs2RoundTrip(server: TCPServer, payload: Chunk[Byte]): IO[Unit] =
     val srvWork: IO[Unit] =
       server.acceptFs2
         .evalMap(fs2Sock =>
@@ -105,7 +105,7 @@ final class Fs2InteropSpec extends Fs2EmileSuite:
         .drain
 
     val cliWork: IO[Unit] =
-      Tcp
+      TCP
         .connect(server.address)
         .widen[EmileError]
         .use(socket =>

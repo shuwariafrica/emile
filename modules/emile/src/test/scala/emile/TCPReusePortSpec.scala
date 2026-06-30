@@ -23,19 +23,19 @@ import com.comcast.ip4s.Ipv4Address
 import com.comcast.ip4s.Port
 import com.comcast.ip4s.SocketAddress
 
-/** Covers [[TcpOptions.reusePort]] (`SO_REUSEPORT`): two binders share the same address. */
-final class TcpReusePortSpec extends EmileSuite:
+/** Covers [[TCPOptions.reusePort]] (`SO_REUSEPORT`): two binders share the same address. */
+final class TCPReusePortSpec extends EmileSuite:
 
   private val anyLoopback: SocketAddress[IpAddress] =
     SocketAddress(Ipv4Address.fromString("127.0.0.1").get, Port.fromInt(0).get)
 
   test("SO_REUSEPORT permits two binders on the same port") {
-    Tcp
-      .bind(anyLoopback, TcpOptions.server)
+    TCP
+      .bind(anyLoopback, TCPOptions.server)
       .widen[EmileError]
       .use(first =>
-        Tcp
-          .bind(first.address, TcpOptions.server)
+        TCP
+          .bind(first.address, TCPOptions.server)
           .widen[EmileError]
           .use(second =>
             EffIO.suspend:
@@ -46,4 +46,4 @@ final class TcpReusePortSpec extends EmileSuite:
       .timeout(5.seconds)
   }
 
-end TcpReusePortSpec
+end TCPReusePortSpec

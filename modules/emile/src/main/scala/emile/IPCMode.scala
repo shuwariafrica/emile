@@ -15,9 +15,9 @@
  */
 package emile
 
-/** The access an [[IpcServer]] grants on its socket file to group and other. Connecting to a
+/** The access an [[IPCServer]] grants on its socket file to group and other. Connecting to a
   * Unix-domain socket requires write access, so [[Writable]] (or [[ReadWrite]]) is what opens a
   * server to other local users.
   */
-enum IpcMode derives CanEqual:
+enum IPCMode derives CanEqual:
   case Readable, Writable, ReadWrite

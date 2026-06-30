@@ -50,7 +50,7 @@ private[emile] object LibUV:
   type TimerCB = CFuncPtr1[Ptr[Byte], Unit]
   type AsyncCB = CFuncPtr1[Ptr[Byte], Unit]
   type WalkCB = CFuncPtr2[Ptr[Byte], Ptr[Byte], Unit]
-  type FsCB = CFuncPtr1[Ptr[Byte], Unit]
+  type FSCB = CFuncPtr1[Ptr[Byte], Unit]
   type GetAddrInfoCB = CFuncPtr3[Ptr[Byte], CInt, Ptr[Byte], Unit]
   type GetNameInfoCB = CFuncPtr4[Ptr[Byte], CInt, CString, CString, Unit]
   type SignalCB = CFuncPtr2[Ptr[Byte], CInt, Unit]
@@ -203,8 +203,8 @@ private[unsafe] object LibUVExtern:
     flags: CInt
   ): CInt = extern
 
-  def uv_fs_open(loop: Ptr[Byte], req: Ptr[Byte], path: CString, flags: CInt, mode: CInt, cb: LibUV.FsCB): CInt = extern
-  def uv_fs_close(loop: Ptr[Byte], req: Ptr[Byte], file: CInt, cb: LibUV.FsCB): CInt = extern
+  def uv_fs_open(loop: Ptr[Byte], req: Ptr[Byte], path: CString, flags: CInt, mode: CInt, cb: LibUV.FSCB): CInt = extern
+  def uv_fs_close(loop: Ptr[Byte], req: Ptr[Byte], file: CInt, cb: LibUV.FSCB): CInt = extern
   // A negative offset reads from (and advances) the current file position; the bufs array is copied,
   // so it need not outlive the call - but each buffer's memory must, until the callback fires.
   def uv_fs_read(
@@ -214,9 +214,9 @@ private[unsafe] object LibUVExtern:
     bufs: Ptr[LibUV.Buf],
     nbufs: CUnsignedInt,
     offset: CLongLong,
-    cb: LibUV.FsCB
+    cb: LibUV.FSCB
   ): CInt = extern
-  def uv_fs_fstat(loop: Ptr[Byte], req: Ptr[Byte], file: CInt, cb: LibUV.FsCB): CInt = extern
+  def uv_fs_fstat(loop: Ptr[Byte], req: Ptr[Byte], file: CInt, cb: LibUV.FSCB): CInt = extern
   def uv_fs_sendfile(
     loop: Ptr[Byte],
     req: Ptr[Byte],
@@ -224,7 +224,7 @@ private[unsafe] object LibUVExtern:
     inFd: CInt,
     inOffset: CLongLong,
     length: CSize,
-    cb: LibUV.FsCB
+    cb: LibUV.FSCB
   ): CInt = extern
   def uv_fs_req_cleanup(req: Ptr[Byte]): Unit = extern
   def uv_fs_get_result(req: Ptr[Byte]): CSSize = extern

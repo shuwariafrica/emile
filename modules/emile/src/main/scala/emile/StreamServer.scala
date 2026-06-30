@@ -28,28 +28,28 @@ import fs2.Stream
 
 import emile.unsafe.CallbackBridge
 import emile.unsafe.LibUV
-import emile.unsafe.LibuvPoller
+import emile.unsafe.LibUVPoller
 import emile.unsafe.Routing
 
 final private[emile] class StreamServerState(
   val handle: Ptr[Byte],
-  val poller: LibuvPoller,
+  val poller: LibUVPoller,
   val address: Matchable,
-  val connections: UnboundedQueue[IO, Either[EmileError.Io, Unit]],
+  val connections: UnboundedQueue[IO, Either[EmileError.IO, Unit]],
   val acceptor: StreamServer.Acceptor
 )
 
 /** A listening stream server, parameterised by its [[SocketKind]] - the shared accept surface of
-  * TCP and [[Ipc$ Ipc]] (Unix-domain / named-pipe) listeners. Covariant in `K`, so a [[TcpServer]]
+  * TCP and [[IPC$ IPC]] (Unix-domain / named-pipe) listeners. Covariant in `K`, so a [[TCPServer]]
   * is usable as an [[AnyServer]]. Accept operations are on [[StreamServer$ StreamServer]].
   */
 opaque type StreamServer[+K <: SocketKind] = StreamServerState
 
-/** A listening TCP server, acquired through [[Tcp$ Tcp]]. */
-type TcpServer = StreamServer[SocketKind.Tcp]
+/** A listening TCP server, acquired through [[TCP$ TCP]]. */
+type TCPServer = StreamServer[SocketKind.TCP]
 
-/** A listening [[Ipc$ Ipc]] (Unix-domain / named-pipe) server, acquired through [[Ipc$ Ipc]]. */
-type IpcServer = StreamServer[SocketKind.Ipc]
+/** A listening [[IPC$ IPC]] (Unix-domain / named-pipe) server, acquired through [[IPC$ IPC]]. */
+type IPCServer = StreamServer[SocketKind.IPC]
 
 /** A stream server of any kind - the neutral spelling over which the shared operations resolve. */
 type AnyServer = StreamServer[SocketKind]
@@ -64,19 +64,19 @@ object StreamServer:
 
   given [K <: SocketKind] => CanEqual[StreamServer[K], StreamServer[K]] = CanEqual.derived
 
-  inline def chmod(server: IpcServer, mode: IpcMode): EmIO[EmileError.Io, Unit] =
+  inline def chmod(server: IPCServer, mode: IPCMode): EmIO[EmileError.IO, Unit] =
     server.chmod(mode)
 
   /** The per-kind accept strategy a [[StreamServer]] is built with - how to allocate, initialise,
     * and address a client handle, and the post-accept `finish` step (the TCP tuning; nothing for
-    * Ipc). Built once at bind by the transport entry ([[Tcp$ Tcp]] / [[Ipc$ Ipc]]) and carried in
+    * IPC). Built once at bind by the transport entry ([[TCP$ TCP]] / [[IPC$ IPC]]) and carried in
     * the server state, so the shared accept machinery stays kind-agnostic.
     */
   final private[emile] class Acceptor(
     val handleType: Int,
     val initClient: (Ptr[Byte], Ptr[Byte]) => CInt,
-    val captureAddresses: Ptr[Byte] => Either[EmileError.Io, (Matchable, Matchable)],
-    val finish: AnySocket => EmIO[EmileError.Io, Unit]
+    val captureAddresses: Ptr[Byte] => Either[EmileError.IO, (Matchable, Matchable)],
+    val finish: AnySocket => EmIO[EmileError.IO, Unit]
   )
 
   extension [K <: SocketKind](server: StreamServer[K])
@@ -95,29 +95,29 @@ object StreamServer:
       * watcher between `uv_connection_cb` and the next `uv_accept`, so kernel backlog absorbs all
       * slack between arrivals and pulls.
       */
-    def accepted: EmStream[EmileError.Io, EmResource[EmileError.Io, Socket[K]]] =
-      Stream.emit(server.acceptOne).covary[EmIO.Of[EmileError.Io]].repeat
+    def accepted: EmStream[EmileError.IO, EmResource[EmileError.IO, Socket[K]]] =
+      Stream.emit(server.acceptOne).covary[EmIO.Of[EmileError.IO]].repeat
 
     /** A single accepted connection as a scoped resource - the socket closes when the resource's
-      * scope ends. The kind's post-accept finish step (TCP tuning; nothing for Ipc) runs before the
+      * scope ends. The kind's post-accept finish step (TCP tuning; nothing for IPC) runs before the
       * socket is yielded.
       */
-    def acceptOne: EmResource[EmileError.Io, Socket[K]] =
+    def acceptOne: EmResource[EmileError.IO, Socket[K]] =
       // makeFull keeps the accept wait cancelable: Resource.make's acquire is uncancelable, which would
       // mask acceptNext's poll(take) and hang a cancelled idle accept (e.g. a graceful shutdown).
       Resource
-        .makeFull[EffIO.Of[EmileError.Io], Socket[K]](poll => poll(acceptNext(server)))(socket => EffIO.liftF(Socket.release(socket)))
+        .makeFull[EffIO.Of[EmileError.IO], Socket[K]](poll => poll(acceptNext(server)))(socket => EffIO.liftF(Socket.release(socket)))
         .evalTap(socket => server.acceptor.finish(socket))
 
   end extension
 
-  extension (server: IpcServer)
+  extension (server: IPCServer)
 
     /** Set the socket file's access mode via `uv_pipe_chmod`. A filesystem-path server only - an
       * abstract-namespace server has no socket file and yields a libuv error.
       */
     @targetName("ext_chmod")
-    inline def chmod(mode: IpcMode): EmIO[EmileError.Io, Unit] =
+    inline def chmod(mode: IPCMode): EmIO[EmileError.IO, Unit] =
       chmodPipe(server, mode)
 
   /** Build the server state of kind `K` and store it in the listen handle's `data` slot so
@@ -126,9 +126,9 @@ object StreamServer:
     */
   private[emile] def construct[K <: SocketKind](
     handle: Ptr[Byte],
-    poller: LibuvPoller,
+    poller: LibUVPoller,
     address: Matchable,
-    connections: UnboundedQueue[IO, Either[EmileError.Io, Unit]],
+    connections: UnboundedQueue[IO, Either[EmileError.IO, Unit]],
     acceptor: Acceptor
   ): StreamServer[K] =
     val state = new StreamServerState(handle, poller, address, connections, acceptor)
@@ -150,12 +150,12 @@ object StreamServer:
     */
   private[emile] val connectionCb: LibUV.ConnectionCB = (handle: Ptr[Byte], status: CInt) =>
     val state = CallbackBridge.load[StreamServerState](handle)
-    val signal: Either[EmileError.Io, Unit] = if status < 0 then Left(IoMapping.fromCode(status)) else Right(())
+    val signal: Either[EmileError.IO, Unit] = if status < 0 then Left(IOMapping.fromCode(status)) else Right(())
     state.connections.unsafeOffer(signal)
 
   // The wait is cancelable, but the take -> uv_accept transition is not: a cancel that has consumed a
   // connection signal must still run uv_accept, or the accepted fd is stranded and the listener stalls.
-  private def acceptNext[K <: SocketKind](server: StreamServer[K]): EmIO[EmileError.Io, Socket[K]] =
+  private def acceptNext[K <: SocketKind](server: StreamServer[K]): EmIO[EmileError.IO, Socket[K]] =
     EffIO.lift(
       IO.uncancelable { poll =>
         poll(server.connections.take).flatMap:
@@ -164,35 +164,35 @@ object StreamServer:
       }
     )
 
-  private def chmodPipe(server: StreamServerState, mode: IpcMode): EmIO[EmileError.Io, Unit] =
+  private def chmodPipe(server: StreamServerState, mode: IPCMode): EmIO[EmileError.IO, Unit] =
     EffIO.lift(
       Routing.onOwner(server.poller):
         val rc = LibUV.uv_pipe_chmod(server.handle, modeFlag(mode))
-        if rc < 0 then Left(IoMapping.fromCode(rc)) else Right(())
+        if rc < 0 then Left(IOMapping.fromCode(rc)) else Right(())
     )
 
   // uv_pipe_chmod reuses libuv's UV_READABLE / UV_WRITABLE flag values for the desired access.
-  private def modeFlag(mode: IpcMode): Int = mode match
-    case IpcMode.Readable => LibUV.UV_READABLE
-    case IpcMode.Writable => LibUV.UV_WRITABLE
-    case IpcMode.ReadWrite => LibUV.UV_READABLE | LibUV.UV_WRITABLE
+  private def modeFlag(mode: IPCMode): Int = mode match
+    case IPCMode.Readable => LibUV.UV_READABLE
+    case IPCMode.Writable => LibUV.UV_WRITABLE
+    case IPCMode.ReadWrite => LibUV.UV_READABLE | LibUV.UV_WRITABLE
 
   // FFI: client handle calloc with throw-on-OOM, uv_close cleanup of a half-built client.
   // scalafix:off DisableSyntax
 
-  private def performAccept[K <: SocketKind](server: StreamServer[K]): Either[EmileError.Io, Socket[K]] =
+  private def performAccept[K <: SocketKind](server: StreamServer[K]): Either[EmileError.IO, Socket[K]] =
     val acceptor = server.acceptor
     val client = stdlib.calloc(1.toCSize, LibUV.uv_handle_size(acceptor.handleType))
     if client == null then throw new OutOfMemoryError("emile: client handle allocation failed")
     val initRc = acceptor.initClient(server.poller.loop, client)
     if initRc != 0 then
       stdlib.free(client)
-      Left(IoMapping.fromCode(initRc))
+      Left(IOMapping.fromCode(initRc))
     else
       val acceptRc = LibUV.uv_accept(server.handle, client)
       if acceptRc != 0 then
         LibUV.uv_close(client, freeHandleCb)
-        Left(IoMapping.fromCode(acceptRc))
+        Left(IOMapping.fromCode(acceptRc))
       else
         acceptor.captureAddresses(client) match
           case Left(error) =>

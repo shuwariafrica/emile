@@ -28,14 +28,14 @@ import com.comcast.ip4s.SocketAddress
 /** Covers [[Socket.readPtr]] / [[Socket.writePtr]] / [[Socket.tryWritePtr]] - the zero-copy read
   * and write surface.
   */
-final class TcpZeroCopySpec extends EmileSuite:
+final class TCPZeroCopySpec extends EmileSuite:
 
   private val anyLoopback: SocketAddress[IpAddress] =
     SocketAddress(Ipv4Address.fromString("127.0.0.1").get, Port.fromInt(0).get)
 
   test("readPtr feeding writePtr round-trips the payload") {
     val payload: Chunk[Byte] = Chunk.array("zero-copy emile".getBytes("UTF-8"))
-    Tcp
+    TCP
       .bind(anyLoopback)
       .widen[EmileError]
       .use(server => EffIO.liftF(zeroCopyEcho(server, payload)))
@@ -45,7 +45,7 @@ final class TcpZeroCopySpec extends EmileSuite:
 
   test("tryWritePtr synchronously writes a small payload and reports its byte count") {
     val payload: Chunk[Byte] = Chunk.array("try-write".getBytes("UTF-8"))
-    Tcp
+    TCP
       .bind(anyLoopback)
       .widen[EmileError]
       .use(server => EffIO.liftF(tryWriteEcho(server, payload)))
@@ -53,7 +53,7 @@ final class TcpZeroCopySpec extends EmileSuite:
       .timeout(5.seconds)
   }
 
-  private def zeroCopyEcho(server: TcpServer, payload: Chunk[Byte]): IO[Unit] =
+  private def zeroCopyEcho(server: TCPServer, payload: Chunk[Byte]): IO[Unit] =
     val srvWork: IO[Unit] =
       server.accepted
         .evalMap(
@@ -69,7 +69,7 @@ final class TcpZeroCopySpec extends EmileSuite:
         .absolve
 
     val cliWork: IO[Unit] =
-      Tcp
+      TCP
         .connect(server.address)
         .widen[EmileError]
         .use(socket =>
@@ -88,7 +88,7 @@ final class TcpZeroCopySpec extends EmileSuite:
 
   // The server reads one chunk zero-copy, then echoes it with tryWritePtr; a small loopback payload
   // fits the send buffer, so the synchronous write reports the whole chunk.
-  private def tryWriteEcho(server: TcpServer, payload: Chunk[Byte]): IO[Unit] =
+  private def tryWriteEcho(server: TCPServer, payload: Chunk[Byte]): IO[Unit] =
     val srvWork: IO[Unit] =
       server.accepted
         .evalMap(
@@ -104,7 +104,7 @@ final class TcpZeroCopySpec extends EmileSuite:
         .absolve
 
     val cliWork: IO[Unit] =
-      Tcp
+      TCP
         .connect(server.address)
         .widen[EmileError]
         .use(socket =>
@@ -121,4 +121,4 @@ final class TcpZeroCopySpec extends EmileSuite:
     srvWork.background.use(_ => cliWork)
   end tryWriteEcho
 
-end TcpZeroCopySpec
+end TCPZeroCopySpec

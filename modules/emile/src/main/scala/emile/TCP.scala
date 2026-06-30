@@ -31,58 +31,58 @@ import com.comcast.ip4s.SocketAddress
 
 import emile.unsafe.CallbackBridge
 import emile.unsafe.LibUV
-import emile.unsafe.LibuvPoller
+import emile.unsafe.LibUVPoller
 import emile.unsafe.Routing
 import emile.unsafe.SockAddr
 
 /** Entry points for TCP bind and connect. Each operation runs on the worker that acquires the
-  * resource; the resulting [[TcpServer]] / [[TcpSocket]] carries that worker's loop.
+  * resource; the resulting [[TCPServer]] / [[TCPSocket]] carries that worker's loop.
   */
-object Tcp:
+object TCP:
 
-  /** Bind a listening server on `address` with the default [[TcpOptions]]. */
-  def bind(address: SocketAddress[IpAddress]): EmResource[EmileError.Bind, TcpServer] =
-    bind(address, TcpOptions.default)
+  /** Bind a listening server on `address` with the default [[TCPOptions]]. */
+  def bind(address: SocketAddress[IpAddress]): EmResource[EmileError.Bind, TCPServer] =
+    bind(address, TCPOptions.default)
 
   /** Bind a listening server on `address` with `options`. Binding and listening complete during
     * acquire, so every failure surfaces here rather than later on the connection stream.
     */
-  def bind(address: SocketAddress[IpAddress], options: TcpOptions): EmResource[EmileError.Bind, TcpServer] =
-    Resource.make[EffIO.Of[EmileError.Bind], TcpServer](bindAcquire(address, options))(server => EffIO.liftF(StreamServer.release(server)))
+  def bind(address: SocketAddress[IpAddress], options: TCPOptions): EmResource[EmileError.Bind, TCPServer] =
+    Resource.make[EffIO.Of[EmileError.Bind], TCPServer](bindAcquire(address, options))(server => EffIO.liftF(StreamServer.release(server)))
 
-  /** Connect to `address` with the default [[TcpOptions]]. */
-  def connect(address: SocketAddress[IpAddress]): EmResource[EmileError.Connect, TcpSocket] =
-    connect(address, TcpOptions.default)
+  /** Connect to `address` with the default [[TCPOptions]]. */
+  def connect(address: SocketAddress[IpAddress]): EmResource[EmileError.Connect, TCPSocket] =
+    connect(address, TCPOptions.default)
 
   /** Connect to `address` with `options`. The connect is cancelable: a `timeout` or cancellation
     * aborts the in-flight `uv_tcp_connect` and frees the handle.
     */
-  def connect(address: SocketAddress[IpAddress], options: TcpOptions): EmResource[EmileError.Connect, TcpSocket] =
+  def connect(address: SocketAddress[IpAddress], options: TCPOptions): EmResource[EmileError.Connect, TCPSocket] =
     Resource
-      .makeFull[EffIO.Of[EmileError.Connect], TcpSocket](poll => poll(connectRaw(address)))(socket => EffIO.liftF(Socket.release(socket)))
+      .makeFull[EffIO.Of[EmileError.Connect], TCPSocket](poll => poll(connectRaw(address)))(socket => EffIO.liftF(Socket.release(socket)))
       .evalTap(applyPostConnect(_, options))
 
-  /** Connect by hostname with the default [[TcpOptions]]. */
-  def connect(host: Host, port: Port): EmResource[EmileError.HostConnect, TcpSocket] =
-    connect(host, port, TcpOptions.default)
+  /** Connect by hostname with the default [[TCPOptions]]. */
+  def connect(host: Host, port: Port): EmResource[EmileError.HostConnect, TCPSocket] =
+    connect(host, port, TCPOptions.default)
 
-  /** Connect by hostname with `options`. Resolves the host through [[Dns]] then attempts the
+  /** Connect by hostname with `options`. Resolves the host through [[DNS]] then attempts the
     * addresses serially in resolver order; the first success wins. Resolver failure surfaces as
-    * [[EmileError.Dns]], connect failure as [[EmileError.Connect]] - both flow through their common
+    * [[EmileError.DNS]], connect failure as [[EmileError.Connect]] - both flow through their common
     * parent [[EmileError.HostConnect]].
     */
-  def connect(host: Host, port: Port, options: TcpOptions): EmResource[EmileError.HostConnect, TcpSocket] =
+  def connect(host: Host, port: Port, options: TCPOptions): EmResource[EmileError.HostConnect, TCPSocket] =
     Resource
-      .makeFull[EffIO.Of[EmileError.HostConnect], TcpSocket](poll => poll(hostConnectAcquire(host, port)))(socket =>
+      .makeFull[EffIO.Of[EmileError.HostConnect], TCPSocket](poll => poll(hostConnectAcquire(host, port)))(socket =>
         EffIO.liftF(Socket.release(socket))
       )
       .evalTap(applyPostConnect(_, options))
 
-  private def bindAcquire(address: SocketAddress[IpAddress], options: TcpOptions): EmIO[EmileError.Bind, TcpServer] =
+  private def bindAcquire(address: SocketAddress[IpAddress], options: TCPOptions): EmIO[EmileError.Bind, TCPServer] =
     EffIO.attempt(
       for
-        poller <- LibuvPollingSystem.currentPoller
-        queue <- UnboundedQueue[IO, Either[EmileError.Io, Unit]]
+        poller <- LibUVPollingSystem.currentPoller
+        queue <- UnboundedQueue[IO, Either[EmileError.IO, Unit]]
         result <- Routing.onOwner(poller)(bindInstall(poller, address, options, queue))
         server <- IO.fromEither(result)
       yield server,
@@ -93,11 +93,11 @@ object Tcp:
   // scalafix:off DisableSyntax
 
   private def bindInstall(
-    poller: LibuvPoller,
+    poller: LibUVPoller,
     address: SocketAddress[IpAddress],
-    options: TcpOptions,
-    queue: UnboundedQueue[IO, Either[EmileError.Io, Unit]]
-  ): Either[EmileError.Bind, TcpServer] =
+    options: TCPOptions,
+    queue: UnboundedQueue[IO, Either[EmileError.IO, Unit]]
+  ): Either[EmileError.Bind, TCPServer] =
     val handle = stdlib.calloc(1.toCSize, LibUV.uv_handle_size(LibUV.UV_TCP))
     if handle == null then throw new OutOfMemoryError("emile: uv_tcp_t allocation failed")
     val initRc = LibUV.uv_tcp_init(poller.loop, handle)
@@ -113,12 +113,12 @@ object Tcp:
   end bindInstall
 
   private def bindAndListen(
-    poller: LibuvPoller,
+    poller: LibUVPoller,
     handle: Ptr[Byte],
     address: SocketAddress[IpAddress],
-    options: TcpOptions,
-    queue: UnboundedQueue[IO, Either[EmileError.Io, Unit]]
-  ): Either[EmileError.Bind, TcpServer] =
+    options: TCPOptions,
+    queue: UnboundedQueue[IO, Either[EmileError.IO, Unit]]
+  ): Either[EmileError.Bind, TCPServer] =
     val sockaddr = stdlib.calloc(1.toCSize, SockAddr.storageSize.toCSize)
     if sockaddr == null then
       LibUV.uv_close(handle, freeHandleCb)
@@ -141,7 +141,7 @@ object Tcp:
           // construct stores the server in the handle's `data` slot - which the connection_cb later
           // recovers - so it has to happen before uv_listen activates and a connection_cb could fire
           // on an unstored handle.
-          val server = StreamServer.construct[SocketKind.Tcp](handle, poller, local, queue, tcpAcceptor(options))
+          val server = StreamServer.construct[SocketKind.TCP](handle, poller, local, queue, tcpAcceptor(options))
           val listenRc = LibUV.uv_listen(handle, options.listenBacklog, StreamServer.connectionCb)
           if listenRc != 0 then
             // construct anchored the server in the data slot; clear it before uv_close or it leaks.
@@ -152,29 +152,29 @@ object Tcp:
     end if
   end bindAndListen
 
-  private def configurePreBind(handle: Ptr[Byte], options: TcpOptions): Either[EmileError.Bind, Unit] =
+  private def configurePreBind(handle: Ptr[Byte], options: TCPOptions): Either[EmileError.Bind, Unit] =
     if options.simultaneousAccepts then Right(())
     else
       val rc = LibUV.uv_tcp_simultaneous_accepts(handle, 0)
       if rc != 0 then Left(BindMapping.fromCode(rc)) else Right(())
 
-  private def bindFlags(options: TcpOptions): CUnsignedInt =
+  private def bindFlags(options: TCPOptions): CUnsignedInt =
     var flags = 0
     if options.reusePort then flags = flags | LibUV.UV_TCP_REUSEPORT
     if options.ipv6Only then flags = flags | LibUV.UV_TCP_IPV6ONLY
     flags.toUInt
 
-  private def connectRaw(address: SocketAddress[IpAddress]): EmIO[EmileError.Connect, TcpSocket] =
+  private def connectRaw(address: SocketAddress[IpAddress]): EmIO[EmileError.Connect, TCPSocket] =
     EffIO.attempt(
       for
-        poller <- LibuvPollingSystem.currentPoller
+        poller <- LibUVPollingSystem.currentPoller
         socket <- performConnect(poller, address)
       yield socket,
       EmileError.Connect.Unexpected(_)
     )
 
-  private def performConnect(poller: LibuvPoller, address: SocketAddress[IpAddress]): IO[TcpSocket] =
-    IO.async[TcpSocket] { cb =>
+  private def performConnect(poller: LibUVPoller, address: SocketAddress[IpAddress]): IO[TCPSocket] =
+    IO.async[TCPSocket] { cb =>
       Routing.onOwner(poller):
         val handle = stdlib.calloc(1.toCSize, LibUV.uv_handle_size(LibUV.UV_TCP))
         if handle == null then throw new OutOfMemoryError("emile: uv_tcp_t allocation failed")
@@ -187,10 +187,10 @@ object Tcp:
     }
 
   private def startConnect(
-    poller: LibuvPoller,
+    poller: LibUVPoller,
     handle: Ptr[Byte],
     address: SocketAddress[IpAddress],
-    cb: Either[Throwable, TcpSocket] => Unit
+    cb: Either[Throwable, TCPSocket] => Unit
   ): Option[IO[Unit]] =
     val req = allocConnectReq()
     val sockaddr = stdlib.calloc(1.toCSize, SockAddr.storageSize.toCSize)
@@ -219,8 +219,8 @@ object Tcp:
     if LibUV.uv_is_closing(handle) == 0 then LibUV.uv_close(handle, freeHandleCb)
 
   private def connectDeliver(
-    cb: Either[Throwable, TcpSocket] => Unit,
-    poller: LibuvPoller,
+    cb: Either[Throwable, TCPSocket] => Unit,
+    poller: LibUVPoller,
     handle: Ptr[Byte]
   ): (Int, Ptr[Byte]) => Unit =
     (status, req) =>
@@ -241,7 +241,7 @@ object Tcp:
                 LibUV.uv_close(handle, freeHandleCb)
                 cb(Left(toConnectError(rc)))
               case Right(peer) =>
-                cb(Right(Socket.construct[SocketKind.Tcp](handle, poller, local, peer)))
+                cb(Right(Socket.construct[SocketKind.TCP](handle, poller, local, peer)))
       end if
 
   private val connectCb: LibUV.ConnectCB = (req: Ptr[Byte], status: CInt) =>
@@ -251,12 +251,12 @@ object Tcp:
     if rc == 0 then EmileError.Connect.Unexpected(new IllegalStateException("emile: unsupported TCP address family"))
     else ConnectMapping.fromCode(rc)
 
-  private def applyPostConnect(socket: TcpSocket, options: TcpOptions): EmIO[EmileError.Connect, Unit] =
+  private def applyPostConnect(socket: TCPSocket, options: TCPOptions): EmIO[EmileError.Connect, Unit] =
     Socket.applyOptions(socket, options).mapError(EmileError.Connect.Unexpected(_))
 
   // The finish step applies the per-socket tuning, so accepted sockets get the same options as
   // connected ones.
-  private def tcpAcceptor(options: TcpOptions): StreamServer.Acceptor =
+  private def tcpAcceptor(options: TCPOptions): StreamServer.Acceptor =
     new StreamServer.Acceptor(
       handleType = LibUV.UV_TCP,
       initClient = (loop, client) => LibUV.uv_tcp_init(loop, client),
@@ -264,23 +264,23 @@ object Tcp:
       finish = socket => Socket.applyOptions(socket, options)
     )
 
-  private def captureTcpAddresses(handle: Ptr[Byte]): Either[EmileError.Io, (Matchable, Matchable)] =
+  private def captureTcpAddresses(handle: Ptr[Byte]): Either[EmileError.IO, (Matchable, Matchable)] =
     for
       local <- Socket.localAddressOf(handle).left.map(toIoError)
       peer <- Socket.peerAddressOf(handle).left.map(toIoError)
     yield (local, peer)
 
-  private def toIoError(rc: Int): EmileError.Io =
-    if rc == 0 then EmileError.Io.Unexpected(new IllegalStateException("emile: unsupported TCP address family"))
-    else IoMapping.fromCode(rc)
+  private def toIoError(rc: Int): EmileError.IO =
+    if rc == 0 then EmileError.IO.Unexpected(new IllegalStateException("emile: unsupported TCP address family"))
+    else IOMapping.fromCode(rc)
 
-  private def hostConnectAcquire(host: Host, port: Port): EmIO[EmileError.HostConnect, TcpSocket] =
-    Dns.resolve(host, port).flatMap(addresses => tryAddresses(addresses.toList, Nil))
+  private def hostConnectAcquire(host: Host, port: Port): EmIO[EmileError.HostConnect, TCPSocket] =
+    DNS.resolve(host, port).flatMap(addresses => tryAddresses(addresses.toList, Nil))
 
   private def tryAddresses(
     addresses: List[SocketAddress[IpAddress]],
     failures: List[EmileError.Connect]
-  ): EmIO[EmileError.HostConnect, TcpSocket] =
+  ): EmIO[EmileError.HostConnect, TCPSocket] =
     addresses match
       case Nil =>
         // failures accumulate newest-first; restore resolver order. A single failure surfaces
@@ -301,4 +301,4 @@ object Tcp:
 
   // scalafix:on DisableSyntax
 
-end Tcp
+end TCP

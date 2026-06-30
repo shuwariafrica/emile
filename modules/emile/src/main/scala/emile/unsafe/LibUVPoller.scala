@@ -33,13 +33,13 @@ import emile.LoopConfig
 
 /** The per-worker libuv event loop: a `uv_loop_t`, the cross-thread interrupt and task-submission
   * `uv_async_t`s, and the `uv_timer_t` that bounds a timed [[poll]]. One instance backs each
-  * cats-effect worker; the libuv C callbacks live in [[LibuvPoller$ LibuvPoller]].
+  * cats-effect worker; the libuv C callbacks live in [[LibUVPoller$ LibUVPoller]].
   */
 // libuv-loop FFI: poller-state vars, C-loop drain/pump while-loops, poll's early returns, null
 // handle/thread sentinels, init-failure throws, callback-recovery asInstanceOf - no
 // allocation-free idiomatic alternative.
 // scalafix:off DisableSyntax
-final private[emile] class LibuvPoller(val config: LoopConfig):
+final private[emile] class LibUVPoller(val config: LoopConfig):
 
   /** The `uv_loop_t` - `calloc`'d at `uv_loop_size()`, `uv_loop_init`'d, then tuned by [[config]]
     * through `uv_loop_configure`. Every step is checked and throws on failure, so a
@@ -75,8 +75,8 @@ final private[emile] class LibuvPoller(val config: LoopConfig):
   @volatile private[unsafe] var closed: Boolean = false
 
   // uv_*_init never writes handle->data, so storing `this` after init assumes no struct layout.
-  checked(LibUV.uv_async_init(loop, interruptAsync, LibuvPoller.interruptCb))
-  checked(LibUV.uv_async_init(loop, taskAsync, LibuvPoller.taskDrainCb))
+  checked(LibUV.uv_async_init(loop, interruptAsync, LibUVPoller.interruptCb))
+  checked(LibUV.uv_async_init(loop, taskAsync, LibUVPoller.taskDrainCb))
   checked(LibUV.uv_timer_init(loop, timeoutTimer))
   LibUV.uv_handle_set_data(interruptAsync, asRawData(this))
   LibUV.uv_handle_set_data(taskAsync, asRawData(this))
@@ -130,7 +130,7 @@ final private[emile] class LibuvPoller(val config: LoopConfig):
         // by blocking, so poll non-blocking rather than over-sleep past `nanos`.
         if ms <= 0L then LibUV.uv_run(loop, LibUV.UV_RUN_NOWAIT): Unit
         else
-          LibUV.uv_timer_start(timeoutTimer, LibuvPoller.timeoutWakeCb, ms.toULong, 0.toULong): Unit
+          LibUV.uv_timer_start(timeoutTimer, LibUVPoller.timeoutWakeCb, ms.toULong, 0.toULong): Unit
           LibUV.uv_run(loop, LibUV.UV_RUN_ONCE): Unit
           LibUV.uv_timer_stop(timeoutTimer): Unit
       case _ => LibUV.uv_run(loop, LibUV.UV_RUN_NOWAIT): Unit
@@ -166,7 +166,7 @@ final private[emile] class LibuvPoller(val config: LoopConfig):
     // terminates. uv_cancel on a non-cancelable (stream) request is a harmless no-op; those are aborted
     // by the uv_walk handle close instead.
     outstandingReqs.values.foreach(req => LibUV.uv_cancel(req): Unit)
-    LibUV.uv_walk(loop, LibuvPoller.closeWalkCb, loop)
+    LibUV.uv_walk(loop, LibUVPoller.closeWalkCb, loop)
     // Blocking ONCE drain, not a NOWAIT 100% spin: each iteration parks until an event. Shutdown
     // latency is bounded by the slowest still-uncancelable in-flight request.
     while LibUV.uv_loop_alive(loop) != 0 do LibUV.uv_run(loop, LibUV.UV_RUN_ONCE): Unit
@@ -174,15 +174,15 @@ final private[emile] class LibuvPoller(val config: LoopConfig):
     stdlib.free(loop)
   end close
 
-end LibuvPoller
+end LibUVPoller
 
-/** The libuv C callbacks for [[LibuvPoller]]. Each is an object-scope `val` capturing no instance,
+/** The libuv C callbacks for [[LibUVPoller]]. Each is an object-scope `val` capturing no instance,
   * as a `CFuncPtr` must; the owning poller is recovered from the handle's `data` slot.
   */
-object LibuvPoller:
+object LibUVPoller:
 
-  private inline def pollerOf(handle: Ptr[Byte]): LibuvPoller =
-    Intrinsics.castRawPtrToObject(toRawPtr(LibUV.uv_handle_get_data(handle))).asInstanceOf[LibuvPoller]
+  private inline def pollerOf(handle: Ptr[Byte]): LibUVPoller =
+    Intrinsics.castRawPtrToObject(toRawPtr(LibUV.uv_handle_get_data(handle))).asInstanceOf[LibUVPoller]
 
   // Drains the cross-thread task queue. The submitted runnables capture every throwable and complete
   // their own IO.async callback, so this blanket catch is only a backstop: a throw must never cross
@@ -203,10 +203,10 @@ object LibuvPoller:
 
   // uv_walk callback for close: closes every handle that is not already closing.
   private val closeWalkCb: LibUV.WalkCB = (handle: Ptr[Byte], _: Ptr[Byte]) =>
-    if LibUV.uv_is_closing(handle) == 0 then LibUV.uv_close(handle, LibuvPoller.freeHandleCb)
+    if LibUV.uv_is_closing(handle) == 0 then LibUV.uv_close(handle, LibUVPoller.freeHandleCb)
 
   // uv_close callback: frees a handle's C memory once libuv has finished with it.
   private val freeHandleCb: LibUV.CloseCB = (handle: Ptr[Byte]) => stdlib.free(handle)
 
-end LibuvPoller
+end LibUVPoller
 // scalafix:on DisableSyntax

@@ -21,7 +21,7 @@ import cats.effect.unsafe.IORuntimeConfig
 
 import munit.CatsEffectSuite
 
-import emile.LibuvPollingSystem
+import emile.LibUVPollingSystem
 import emile.LoopConfig
 
 /** Base for emile's concurrency-invariant suites: every test runs on a libuv `IORuntime` forced to
@@ -41,7 +41,7 @@ object StressSuite:
     */
   lazy val AggressiveRuntime: IORuntime =
     val rt = IORuntimeBuilder()
-      .setPollingSystem(LibuvPollingSystem(LoopConfig.default))
+      .setPollingSystem(LibUVPollingSystem(LoopConfig.default))
       .setConfig(IORuntimeConfig().copy(cancelationCheckThreshold = 2, autoYieldThreshold = 2))
       .build()
     java.lang.Runtime.getRuntime.addShutdownHook(new Thread(() => rt.shutdown(), "emile-stress-shutdown"))

@@ -38,7 +38,7 @@ val `emile-fs2` =
     .in(file("modules/emile-fs2"))
     .enablePlugins(SNXPlugin, EmileNativeBuild)
     .dependsOn(emile)
-    .settings(description := "fs2-networking interop for emile: TcpSocket/TcpServer adapters to fs2.io.net.Socket.")
+    .settings(description := "fs2-networking interop for emile: TCPSocket/TCPServer adapters to fs2.io.net.Socket.")
     .settings(commonSettings)
     .settings(publishSettings)
     .settings(libraryDependencies += Dependencies.`fs2-io`)

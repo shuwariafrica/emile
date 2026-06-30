@@ -28,8 +28,8 @@ import emile.LoopConfig
 final class CallbackBridgeSpec extends munit.FunSuite:
 
   // A handle-sized zeroed buffer; uv_handle_set_data / uv_handle_get_data touch only the data slot.
-  private def withPollerAndHandle[A](body: (LibuvPoller, Ptr[Byte]) => A): A =
-    val poller = new LibuvPoller(LoopConfig.default)
+  private def withPollerAndHandle[A](body: (LibUVPoller, Ptr[Byte]) => A): A =
+    val poller = new LibUVPoller(LoopConfig.default)
     val handle = stdlib.calloc(1.toCSize, LibUV.uv_handle_size(LibUV.UV_ASYNC))
     try body(poller, handle)
     finally
