@@ -26,7 +26,7 @@ import com.comcast.ip4s.Ipv4Address
 import com.comcast.ip4s.Port
 import com.comcast.ip4s.SocketAddress
 
-/** Covers the socket lifecycle under concurrency and after release: [[TcpServer.accepted]] keeps
+/** Covers the socket lifecycle under concurrency and after release: [[StreamServer.accepted]] keeps
   * each socket valid for its handler's `use` scope even when many run at once (the `server` preset
   * is used, so the finish-socket options are also applied on the accept path), and an operation on
   * a socket whose resource has released fails with [[EmileError.Io.AlreadyClosed]] rather than a
@@ -54,7 +54,7 @@ final class LifecycleSpec extends EmileSuite:
       .use(server =>
         EffIO.liftF(
           for
-            addr <- IO(server.address.asIpUnsafe)
+            addr <- IO(server.address)
             leaked <- Tcp.connect(addr).widen[EmileError].use(socket => EffIO.succeed(socket)).absolve
             result <- leaked.read(4096).either
           yield assertEquals(result, Left(EmileError.Io.AlreadyClosed): Either[EmileError.Io, Option[Chunk[Byte]]])
@@ -65,7 +65,7 @@ final class LifecycleSpec extends EmileSuite:
   }
 
   private def concurrentEcho(server: TcpServer, payload: Chunk[Byte], n: Int): IO[Unit] =
-    val addr = server.address.asIpUnsafe
+    val addr = server.address
     val srvWork: IO[Unit] =
       server.accepted
         .parEvalMapUnordered(n)(

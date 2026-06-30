@@ -70,7 +70,7 @@ final class TcpZeroCopySpec extends EmileSuite:
 
     val cliWork: IO[Unit] =
       Tcp
-        .connect(server.address.asIpUnsafe)
+        .connect(server.address)
         .widen[EmileError]
         .use(socket =>
           EffIO.liftF(
@@ -105,7 +105,7 @@ final class TcpZeroCopySpec extends EmileSuite:
 
     val cliWork: IO[Unit] =
       Tcp
-        .connect(server.address.asIpUnsafe)
+        .connect(server.address)
         .widen[EmileError]
         .use(socket =>
           EffIO.liftF(

@@ -54,7 +54,7 @@ final class Fs2InteropSpec extends Fs2EmileSuite:
       .use(server =>
         EffIO.liftF(
           Tcp
-            .connect(server.address.asIpUnsafe)
+            .connect(server.address)
             .widen[EmileError]
             .use(socket => EffIO.liftF(socket.asFs2.setOption(StandardSocketOptions.SO_KEEPALIVE, java.lang.Boolean.TRUE)))
             .absolve
@@ -71,7 +71,7 @@ final class Fs2InteropSpec extends Fs2EmileSuite:
       .use(server =>
         EffIO.liftF(
           Tcp
-            .connect(server.address.asIpUnsafe)
+            .connect(server.address)
             .widen[EmileError]
             .use(socket =>
               EffIO.liftF(
@@ -106,7 +106,7 @@ final class Fs2InteropSpec extends Fs2EmileSuite:
 
     val cliWork: IO[Unit] =
       Tcp
-        .connect(server.address.asIpUnsafe)
+        .connect(server.address)
         .widen[EmileError]
         .use(socket =>
           EffIO.liftF {

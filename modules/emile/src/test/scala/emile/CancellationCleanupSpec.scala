@@ -46,7 +46,7 @@ final class CancellationCleanupSpec extends EmileSuite:
         val acceptOne = server.acceptOne.use_.absolve
         // Hold the connection so the server accepts before the client closes (a rapid close aborts the accept).
         val connectHold =
-          Tcp.connect(server.address.asIpUnsafe).widen[EmileError].use(_ => EffIO.liftF(IO.sleep(150.millis))).absolve
+          Tcp.connect(server.address).widen[EmileError].use(_ => EffIO.liftF(IO.sleep(150.millis))).absolve
         EffIO.liftF(acceptOne.timeoutTo(300.millis, IO.unit).flatMap(_ => IO.both(acceptOne, connectHold).map(_ => ())))
       }
       .absolve
@@ -60,7 +60,7 @@ final class CancellationCleanupSpec extends EmileSuite:
         .bind(anyLoopback)
         .widen[EmileError]
         .use { server =>
-          val connect = Tcp.connect(server.address.asIpUnsafe).widen[EmileError].use_.absolve.attempt.map(_ => ())
+          val connect = Tcp.connect(server.address).widen[EmileError].use_.absolve.attempt.map(_ => ())
           EffIO.liftF(connect.timeoutTo(20.millis, IO.unit))
         }
         .absolve

@@ -25,7 +25,7 @@ import com.comcast.ip4s.Ipv4Address
 import com.comcast.ip4s.Port
 import com.comcast.ip4s.SocketAddress
 
-/** Covers [[Tcp.bind]] / [[Tcp.connect]] / [[TcpServer.accepted]] and the read / write socket
+/** Covers [[Tcp.bind]] / [[Tcp.connect]] / [[StreamServer.accepted]] and the read / write socket
   * surface end-to-end over a loopback round-trip.
   */
 final class TcpSpec extends EmileSuite:
@@ -39,7 +39,7 @@ final class TcpSpec extends EmileSuite:
       .widen[EmileError]
       .use(server =>
         EffIO.suspend:
-          val addr = server.address.asIpUnsafe
+          val addr = server.address
           assert(addr.host.isLoopback)
           assert(addr.port.value != 0)
       )
@@ -80,7 +80,7 @@ final class TcpSpec extends EmileSuite:
 
   test("connect to a closed port fails on the Connect channel") {
     val closedAddress: IO[SocketAddress[IpAddress]] =
-      Tcp.bind(anyLoopback).use(server => EffIO.suspend(server.address.asIpUnsafe)).absolve
+      Tcp.bind(anyLoopback).use(server => EffIO.suspend(server.address)).absolve
     closedAddress
       .flatMap(addr => Tcp.connect(addr).use(_ => EffIO.suspend(())).either)
       .map {
@@ -109,7 +109,7 @@ final class TcpSpec extends EmileSuite:
 
     val cliWork: IO[Unit] =
       Tcp
-        .connect(server.address.asIpUnsafe)
+        .connect(server.address)
         .widen[EmileError]
         .use(socket =>
           EffIO.liftF(
@@ -136,7 +136,7 @@ final class TcpSpec extends EmileSuite:
 
     val cliWork: IO[Unit] =
       Tcp
-        .connect(server.address.asIpUnsafe)
+        .connect(server.address)
         .widen[EmileError]
         .use(socket =>
           EffIO.liftF(
@@ -172,7 +172,7 @@ final class TcpSpec extends EmileSuite:
 
     val oneCycle: IO[Unit] =
       Tcp
-        .connect(server.address.asIpUnsafe)
+        .connect(server.address)
         .widen[EmileError]
         .use(socket =>
           EffIO.liftF(

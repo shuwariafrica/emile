@@ -98,8 +98,8 @@ object Fs2Interop:
     // Deprecated on fs2's Socket / SocketInfo but still abstract, so they must be implemented.
 
     def isOpen: IO[Boolean] = IO.pure(true)
-    def localAddress: IO[SocketAddress[IpAddress]] = IO(address.asIpUnsafe)
-    def remoteAddress: IO[SocketAddress[IpAddress]] = IO(peerAddress.asIpUnsafe)
+    def localAddress: IO[SocketAddress[IpAddress]] = IO(socket.address)
+    def remoteAddress: IO[SocketAddress[IpAddress]] = IO(socket.peerAddress)
 
   end Fs2SocketAdapter
 

@@ -35,11 +35,11 @@ final class TcpReusePortSpec extends EmileSuite:
       .widen[EmileError]
       .use(first =>
         Tcp
-          .bind(first.address.asIpUnsafe, TcpOptions.server)
+          .bind(first.address, TcpOptions.server)
           .widen[EmileError]
           .use(second =>
             EffIO.suspend:
-              assertEquals(second.address.asIpUnsafe.port, first.address.asIpUnsafe.port)
+              assertEquals(second.address.port, first.address.port)
           )
       )
       .absolve

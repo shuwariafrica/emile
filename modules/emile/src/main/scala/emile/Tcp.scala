@@ -48,7 +48,7 @@ object Tcp:
     * acquire, so every failure surfaces here rather than later on the connection stream.
     */
   def bind(address: SocketAddress[IpAddress], options: TcpOptions): EmResource[EmileError.Bind, TcpServer] =
-    Resource.make[EffIO.Of[EmileError.Bind], TcpServer](bindAcquire(address, options))(server => EffIO.liftF(TcpServer.release(server)))
+    Resource.make[EffIO.Of[EmileError.Bind], TcpServer](bindAcquire(address, options))(server => EffIO.liftF(StreamServer.release(server)))
 
   /** Connect to `address` with the default [[TcpOptions]]. */
   def connect(address: SocketAddress[IpAddress]): EmResource[EmileError.Connect, TcpSocket] =
@@ -138,11 +138,11 @@ object Tcp:
             else BindMapping.fromCode(rc)
           )
         case Right(local) =>
-          // TcpServer.construct stores the server in the handle's `data` slot - which the
-          // connection_cb later recovers - so it has to happen before uv_listen activates and
-          // a connection_cb could fire on an unstored handle.
-          val server = TcpServer.construct(handle, poller, local, options, queue)
-          val listenRc = LibUV.uv_listen(handle, options.listenBacklog, TcpServer.connectionCb)
+          // construct stores the server in the handle's `data` slot - which the connection_cb later
+          // recovers - so it has to happen before uv_listen activates and a connection_cb could fire
+          // on an unstored handle.
+          val server = StreamServer.construct[SocketKind.Tcp](handle, poller, local, queue, tcpAcceptor(options))
+          val listenRc = LibUV.uv_listen(handle, options.listenBacklog, StreamServer.connectionCb)
           if listenRc != 0 then
             // construct anchored the server in the data slot; clear it before uv_close or it leaks.
             CallbackBridge.clear(poller, handle)
@@ -241,7 +241,7 @@ object Tcp:
                 LibUV.uv_close(handle, freeHandleCb)
                 cb(Left(toConnectError(rc)))
               case Right(peer) =>
-                cb(Right(Socket.construct(handle, poller, local, peer)))
+                cb(Right(Socket.construct[SocketKind.Tcp](handle, poller, local, peer)))
       end if
 
   private val connectCb: LibUV.ConnectCB = (req: Ptr[Byte], status: CInt) =>
@@ -253,6 +253,26 @@ object Tcp:
 
   private def applyPostConnect(socket: TcpSocket, options: TcpOptions): EmIO[EmileError.Connect, Unit] =
     Socket.applyOptions(socket, options).mapError(EmileError.Connect.Unexpected(_))
+
+  // The finish step applies the per-socket tuning, so accepted sockets get the same options as
+  // connected ones.
+  private def tcpAcceptor(options: TcpOptions): StreamServer.Acceptor =
+    new StreamServer.Acceptor(
+      handleType = LibUV.UV_TCP,
+      initClient = (loop, client) => LibUV.uv_tcp_init(loop, client),
+      captureAddresses = captureTcpAddresses,
+      finish = socket => Socket.applyOptions(socket, options)
+    )
+
+  private def captureTcpAddresses(handle: Ptr[Byte]): Either[EmileError.Io, (Matchable, Matchable)] =
+    for
+      local <- Socket.localAddressOf(handle).left.map(toIoError)
+      peer <- Socket.peerAddressOf(handle).left.map(toIoError)
+    yield (local, peer)
+
+  private def toIoError(rc: Int): EmileError.Io =
+    if rc == 0 then EmileError.Io.Unexpected(new IllegalStateException("emile: unsupported TCP address family"))
+    else IoMapping.fromCode(rc)
 
   private def hostConnectAcquire(host: Host, port: Port): EmIO[EmileError.HostConnect, TcpSocket] =
     Dns.resolve(host, port).flatMap(addresses => tryAddresses(addresses.toList, Nil))

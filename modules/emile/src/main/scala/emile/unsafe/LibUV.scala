@@ -57,6 +57,7 @@ private[emile] object LibUV:
 
   // uv_handle_type ordinals (for uv_handle_size).
   inline val UV_ASYNC = 1
+  inline val UV_NAMED_PIPE = 7
   inline val UV_POLL = 8
   inline val UV_TCP = 12
   inline val UV_TIMER = 13
@@ -161,6 +162,21 @@ private[unsafe] object LibUVExtern:
   def uv_tcp_simultaneous_accepts(handle: Ptr[Byte], enable: CInt): CInt = extern
   def uv_tcp_getsockname(handle: Ptr[Byte], name: Ptr[Byte], nameLen: Ptr[CInt]): CInt = extern
   def uv_tcp_getpeername(handle: Ptr[Byte], name: Ptr[Byte], nameLen: Ptr[CInt]): CInt = extern
+
+  // uv_pipe_t (a uv_stream_t): Unix-domain sockets on Unix, named pipes on Windows.
+  def uv_pipe_init(loop: Ptr[Byte], handle: Ptr[Byte], ipc: CInt): CInt = extern
+  def uv_pipe_bind2(handle: Ptr[Byte], name: CString, namelen: CSize, flags: CUnsignedInt): CInt = extern
+  def uv_pipe_connect2(
+    req: Ptr[Byte],
+    handle: Ptr[Byte],
+    name: CString,
+    namelen: CSize,
+    flags: CUnsignedInt,
+    connectCb: LibUV.ConnectCB
+  ): CInt = extern
+  def uv_pipe_getsockname(handle: Ptr[Byte], buffer: CString, size: Ptr[CSize]): CInt = extern
+  def uv_pipe_getpeername(handle: Ptr[Byte], buffer: CString, size: Ptr[CSize]): CInt = extern
+  def uv_pipe_chmod(handle: Ptr[Byte], flags: CInt): CInt = extern
 
   def uv_poll_init(loop: Ptr[Byte], handle: Ptr[Byte], fd: CInt): CInt = extern
   def uv_poll_start(handle: Ptr[Byte], events: CInt, pollCb: LibUV.PollCB): CInt = extern

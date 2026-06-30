@@ -29,7 +29,6 @@ import cats.effect.Resource
 import cats.effect.std.unsafe.BoundedQueue
 import fs2.Chunk
 import fs2.Stream
-import com.comcast.ip4s.GenSocketAddress
 import com.comcast.ip4s.IpAddress
 import com.comcast.ip4s.SocketAddress
 
@@ -43,14 +42,14 @@ import emile.unsafe.SockAddr
 
 final private class StreamSocketState(
   val live: LiveHandle,
-  val address: GenSocketAddress,
-  val peerAddress: GenSocketAddress,
+  val address: Matchable,
+  val peerAddress: Matchable,
   val readBuffer: ResizableBuffer
 )
 
-/** The kind of a connected stream socket - the phantom tag that distinguishes a TCP socket from a
-  * Unix-domain one at the type level while they share one byte-stream implementation. Erased at
-  * runtime. The variants live in [[SocketKind$ SocketKind]].
+/** The kind of a connected stream socket - the phantom tag that distinguishes a TCP socket from an
+  * [[Ipc$ Ipc]] (Unix-domain / named-pipe) one at the type level while they share one byte-stream
+  * implementation. Erased at runtime. The variants live in [[SocketKind$ SocketKind]].
   */
 sealed trait SocketKind
 
@@ -60,23 +59,31 @@ object SocketKind:
   /** A TCP stream socket. */
   sealed trait Tcp extends SocketKind
 
-  /** A Unix-domain stream socket. */
-  sealed trait Unix extends SocketKind
+  /** A local inter-process stream socket - a Unix-domain socket on Unix, a named pipe on Windows. */
+  sealed trait Ipc extends SocketKind
 
 /** A connected stream socket, parameterised by its [[SocketKind]] - the shared byte-stream surface
-  * of TCP and Unix-domain sockets. Covariant in `K`, so a [[TcpSocket]] is usable as an
-  * [[AnySocket]]. Read, write, and lifecycle operations are on [[Socket$ Socket]].
+  * of TCP and [[Ipc$ Ipc]] (Unix-domain / named-pipe) sockets. Covariant in `K`, so a [[TcpSocket]]
+  * is usable as an [[AnySocket]]. Read, write, and lifecycle operations are on [[Socket$ Socket]].
   */
 opaque type Socket[+K <: SocketKind] = StreamSocketState
 
-/** A connected TCP socket, acquired through [[Tcp]] or [[TcpServer]]. */
+/** A connected TCP socket, acquired through [[Tcp$ Tcp]] or [[StreamServer]]. */
 type TcpSocket = Socket[SocketKind.Tcp]
 
-/** A connected Unix-domain stream socket. */
-type UnixSocket = Socket[SocketKind.Unix]
+/** A connected [[Ipc$ Ipc]] (Unix-domain / named-pipe) stream socket. */
+type IpcSocket = Socket[SocketKind.Ipc]
 
 /** A stream socket of any kind - the neutral spelling over which the shared operations resolve. */
 type AnySocket = Socket[SocketKind]
+
+/** The address type of a socket or server of kind `K` - an IP socket address for
+  * [[SocketKind.Tcp]], an [[IpcAddress]] for [[SocketKind.Ipc]] - letting `address` / `peerAddress`
+  * return the precise type per kind with no partial downcast.
+  */
+type AddressOf[K <: SocketKind] = K match
+  case SocketKind.Tcp => SocketAddress[IpAddress]
+  case SocketKind.Ipc => IpcAddress
 
 /** Operations, factories, and equality for [[Socket]]. The byte-stream surface is defined once over
   * `Socket[K]` and shared by every kind; kind-specific operations (for example TCP's
@@ -126,10 +133,10 @@ object Socket:
   extension [K <: SocketKind](socket: Socket[K])
 
     /** The local address this socket is bound to - captured at connect / accept. */
-    def address: GenSocketAddress = socket.address
+    def address: AddressOf[K] = addrOf[K](socket.address)
 
     /** The peer address this socket is connected to - captured at connect / accept. */
-    def peerAddress: GenSocketAddress = socket.peerAddress
+    def peerAddress: AddressOf[K] = addrOf[K](socket.peerAddress)
 
     /** A back-pressured byte stream over a persistent libuv read. The watcher is armed once per
       * stream; if the consumer falls behind, libuv is paused with `uv_read_stop` and resumed when
@@ -229,16 +236,23 @@ object Socket:
     inline def setKeepAlive(keepAlive: Option[TcpKeepAlive]): EmIO[EmileError.Io, Unit] =
       keepAliveOn(socket, keepAlive)
 
-  /** Build a [[TcpSocket]] over an already-initialised libuv handle - called from [[Tcp$ Tcp]] and
-    * [[TcpServer]] once `uv_tcp_init` (+ `uv_tcp_connect` or `uv_accept`) and the address-capture
-    * have succeeded.
+  extension (socket: IpcSocket)
+
+    /** The credentials of the connected peer process, for a server to authorise a local client. */
+    def peerCredentials: EmIO[EmileError.Io, PeerCredentials] =
+      peerCredentialsOf(socket)
+
+  /** Build a [[Socket]] of kind `K` over an already-initialised libuv handle - called once the
+    * transport entry (`uv_*_init` + `uv_*_connect` or `uv_accept`) and the address capture have
+    * succeeded. The stored addresses must be the [[AddressOf]] for `K`; the `address` /
+    * `peerAddress` accessors reinterpret them at that type.
     */
-  private[emile] def construct(
+  private[emile] def construct[K <: SocketKind](
     handle: Ptr[Byte],
     poller: LibuvPoller,
-    address: GenSocketAddress,
-    peerAddress: GenSocketAddress
-  ): TcpSocket =
+    address: Matchable,
+    peerAddress: Matchable
+  ): Socket[K] =
     new StreamSocketState(LiveHandle(poller, handle), address, peerAddress, ResizableBuffer(DefaultReadSize))
 
   /** The canonical release for a socket: stop any in-flight read and clear the bridge (guarded, so
@@ -251,10 +265,11 @@ object Socket:
       .flatMap(_ => LiveHandle.closeOnOwner(socket.live))
       .flatMap(_ => IO(socket.readBuffer.free()))
 
-  /** Apply the per-socket TCP tuning in `options` to a freshly connected or accepted socket - the
-    * one finish-socket step shared by the connect and accept paths.
+  /** Apply the per-socket TCP tuning in `options` - the one finish-socket step shared by connect
+    * and accept. Takes [[AnySocket]] so the kind-erased accept finish can carry it; it is only ever
+    * applied to a TCP socket.
     */
-  private[emile] def applyOptions(socket: TcpSocket, options: TcpOptions): EmIO[EmileError.Io, Unit] =
+  private[emile] def applyOptions(socket: AnySocket, options: TcpOptions): EmIO[EmileError.Io, Unit] =
     val noDelayStep = if options.noDelay then socket.setNoDelay(true) else EffIO.succeed(())
     val keepAliveStep = options.keepAlive match
       case None => EffIO.succeed(())
@@ -277,6 +292,13 @@ object Socket:
 
   // The closed-branch result for a handle access that returns a typed Either.
   private val closedIo: Either[EmileError.Io, Unit] = Left(EmileError.Io.AlreadyClosed)
+
+  // The closed-branch result for peerCredentials.
+  private val closedPeerCred: Either[EmileError.Io, PeerCredentials] = Left(EmileError.Io.AlreadyClosed)
+
+  // phantom-guided: construct[K] stores exactly the AddressOf[K] for this kind in the address slots.
+  private def addrOf[K <: SocketKind](address: Matchable): AddressOf[K] =
+    address.asInstanceOf[AddressOf[K]] // scalafix:ok DisableSyntax.asInstanceOf
 
   private def addressOf(
     getter: (Ptr[Byte], Ptr[Byte], Ptr[CInt]) => CInt,
@@ -731,6 +753,28 @@ object Socket:
         if err == posixErrno.ENOTCONN then Right(())
         else Left(IoMapping.fromCode(-err))
       else Right(())
+
+  // scala-native's posix layer does not bind SO_PEERCRED; the value (17) is Linux's (asm-generic/socket.h).
+  private inline val SoPeerCred = 17
+
+  // struct ucred { pid_t pid; uid_t uid; gid_t gid; } - three 32-bit ints on Linux.
+  private type Ucred = CStruct3[CInt, CInt, CInt]
+
+  private def peerCredentialsOf(socket: StreamSocketState): EmIO[EmileError.Io, PeerCredentials] =
+    EffIO.lift(Routing.onOwner(poller(socket))(LiveHandle.tryUse(socket.live, closedPeerCred)(readPeerCred)))
+
+  private def readPeerCred(handle: Ptr[Byte]): Either[EmileError.Io, PeerCredentials] =
+    val fdCell = stackalloc[CInt]()
+    val rc1 = LibUV.uv_fileno(handle, fdCell)
+    if rc1 < 0 then Left(IoMapping.fromCode(rc1))
+    else
+      val cred = stackalloc[Ucred]()
+      val len = stackalloc[posixSocket.socklen_t]()
+      !len = sizeof[Ucred].toUInt
+      val rc2 = posixSocket.getsockopt(!fdCell, posixSocket.SOL_SOCKET, SoPeerCred, cred.asInstanceOf[CVoidPtr], len)
+      // getsockopt sets errno on failure; -errno is the libuv-style code IoMapping expects.
+      if rc2 < 0 then Left(IoMapping.fromCode(-libcErrno.errno))
+      else Right(PeerCredentials(cred._1, cred._2, cred._3))
 
   // onLoop runs the consumer's thunk on the owner thread; it does not touch emile's handle, so the
   // routing alone is the contract and no liveness guard applies.

@@ -60,7 +60,7 @@ final class TcpCancellationSpec extends EmileSuite:
 
     val cliWork: IO[Unit] =
       Tcp
-        .connect(server.address.asIpUnsafe)
+        .connect(server.address)
         .widen[EmileError]
         .use(socket =>
           EffIO.liftF(
