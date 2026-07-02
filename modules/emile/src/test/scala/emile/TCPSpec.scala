@@ -89,6 +89,17 @@ final class TCPSpec extends EmileSuite:
       .timeout(5.seconds)
   }
 
+  test("write(chunks) gathers a batch beyond the stack threshold as one ordered write") {
+    // 200 buffers exceeds the 128-buffer stack threshold, exercising the heap-allocated bufs path.
+    val parts: List[Chunk[Byte]] = (0 until 200).toList.map(i => Chunk.array(s"$i;".getBytes("UTF-8")))
+    TCP
+      .bind(anyLoopback)
+      .widen[EmileError]
+      .use(server => EffIO.liftF(vectoredEcho(server, parts)))
+      .absolve
+      .timeout(5.seconds)
+  }
+
   test("connect to a closed port fails on the Connect channel") {
     val closedAddress: IO[SocketAddress[IpAddress]] =
       TCP.bind(anyLoopback).use(server => EffIO.suspend(server.address)).absolve

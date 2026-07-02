@@ -73,6 +73,11 @@ object EmileError:
     case object HostUnreachable extends EmileError("Host unreachable", None) with Connect
     case object TimedOut extends EmileError("Connection timed out", None) with Connect
 
+    /** A connect argument emile rejected before reaching libuv - for example an
+      * [[IPCAddress.Autobind]], which is bind-only.
+      */
+    final case class InvalidAddress(detail: String) extends EmileError(s"Invalid address: $detail", None) with Connect
+
     /** Every address a hostname resolved to failed to connect; `failures` carries the per-address
       * [[Connect]] errors in resolver order.
       */

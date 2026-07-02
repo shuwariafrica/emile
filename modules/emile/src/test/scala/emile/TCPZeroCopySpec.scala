@@ -58,6 +58,7 @@ final class TCPZeroCopySpec extends EmileSuite:
       server.accepted
         .evalMap(
           _.use(socket =>
+            // f fails with EmileError.IO (writePtr), so EmileError.IO | EmileError.IO collapses to it.
             socket
               .readPtr((ptr, len) => socket.writePtr(ptr, len))
               .map(_ => ())
