@@ -91,6 +91,44 @@ final class Fs2InteropSpec extends Fs2EmileSuite:
       .timeout(5.seconds)
   }
 
+  test("getOption reflects the TCP_NODELAY value set through setOption") {
+    withConnectedFs2Socket: fs2Sock =>
+      for
+        _ <- fs2Sock.setOption(StandardSocketOptions.TCP_NODELAY, java.lang.Boolean.TRUE)
+        enabled <- fs2Sock.getOption(StandardSocketOptions.TCP_NODELAY)
+        _ <- IO(assertEquals(enabled.map(_.booleanValue), Some(true)))
+        _ <- fs2Sock.setOption(StandardSocketOptions.TCP_NODELAY, java.lang.Boolean.FALSE)
+        disabled <- fs2Sock.getOption(StandardSocketOptions.TCP_NODELAY)
+        _ <- IO(assertEquals(disabled.map(_.booleanValue), Some(false)))
+      yield ()
+  }
+
+  test("getOption reads the SO_KEEPALIVE flag and returns None for an unsupported option") {
+    withConnectedFs2Socket: fs2Sock =>
+      for
+        _ <- fs2Sock.setOption(StandardSocketOptions.SO_KEEPALIVE, java.lang.Boolean.TRUE)
+        keepAlive <- fs2Sock.getOption(StandardSocketOptions.SO_KEEPALIVE)
+        _ <- IO(assertEquals(keepAlive.map(_.booleanValue), Some(true)))
+        unsupported <- fs2Sock.getOption(StandardSocketOptions.SO_RCVBUF)
+        _ <- IO(assertEquals(unsupported, None))
+      yield ()
+  }
+
+  // Binds, connects a client, and runs `f` on the connected socket's fs2 view. The kernel completes
+  // the handshake off the listener backlog, so no server-side accept is needed to read the client's
+  // own options.
+  private def withConnectedFs2Socket(f: fs2.io.net.Socket[IO] => IO[Unit]): IO[Unit] =
+    TCP
+      .bind(anyLoopback)
+      .widen[EmileError]
+      .use(server =>
+        EffIO.liftF(
+          TCP.connect(server.address).widen[EmileError].use(socket => EffIO.liftF(f(socket.asFs2))).absolve
+        )
+      )
+      .absolve
+      .timeout(5.seconds)
+
   private def fs2RoundTrip(server: TCPServer, payload: Chunk[Byte]): IO[Unit] =
     val srvWork: IO[Unit] =
       server.acceptFs2

@@ -54,7 +54,7 @@ final class LibUVPollingSystem private (config: LoopConfig) extends PollingSyste
 
   def close(): Unit = ()
 
-  def metrics(p: LibUVPoller): PollerMetrics = LibUVPollingSystem.zeroMetrics
+  def metrics(p: LibUVPoller): PollerMetrics = p.metrics
 
 end LibUVPollingSystem
 
@@ -68,37 +68,6 @@ object LibUVPollingSystem:
 
   /** A libuv polling system tuned by `config`. */
   def apply(config: LoopConfig): LibUVPollingSystem = new LibUVPollingSystem(config)
-
-  /** A single shared all-zero `PollerMetrics`. emile does not instrument poller metrics, and
-    * cats-effect's own `PollerMetrics.noop` is `private[effect]` so cannot be reused.
-    */
-  private[emile] val zeroMetrics: PollerMetrics =
-    new PollerMetrics:
-      def operationsOutstandingCount(): Int = 0
-      def totalOperationsSubmittedCount(): Long = 0L
-      def totalOperationsSucceededCount(): Long = 0L
-      def totalOperationsErroredCount(): Long = 0L
-      def totalOperationsCanceledCount(): Long = 0L
-      def acceptOperationsOutstandingCount(): Int = 0
-      def totalAcceptOperationsSubmittedCount(): Long = 0L
-      def totalAcceptOperationsSucceededCount(): Long = 0L
-      def totalAcceptOperationsErroredCount(): Long = 0L
-      def totalAcceptOperationsCanceledCount(): Long = 0L
-      def connectOperationsOutstandingCount(): Int = 0
-      def totalConnectOperationsSubmittedCount(): Long = 0L
-      def totalConnectOperationsSucceededCount(): Long = 0L
-      def totalConnectOperationsErroredCount(): Long = 0L
-      def totalConnectOperationsCanceledCount(): Long = 0L
-      def readOperationsOutstandingCount(): Int = 0
-      def totalReadOperationsSubmittedCount(): Long = 0L
-      def totalReadOperationsSucceededCount(): Long = 0L
-      def totalReadOperationsErroredCount(): Long = 0L
-      def totalReadOperationsCanceledCount(): Long = 0L
-      def writeOperationsOutstandingCount(): Int = 0
-      def totalWriteOperationsSubmittedCount(): Long = 0L
-      def totalWriteOperationsSucceededCount(): Long = 0L
-      def totalWriteOperationsErroredCount(): Long = 0L
-      def totalWriteOperationsCanceledCount(): Long = 0L
 
   /** The worker-facing handle onto a [[emile.unsafe.LibUVPoller LibUVPoller]] - obtains the calling
     * worker's poller and tests poller ownership.

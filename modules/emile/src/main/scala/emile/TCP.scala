@@ -32,6 +32,7 @@ import com.comcast.ip4s.SocketAddress
 import emile.unsafe.CallbackBridge
 import emile.unsafe.LibUV
 import emile.unsafe.LibUVPoller
+import emile.unsafe.OpOutcome
 import emile.unsafe.Routing
 import emile.unsafe.SockAddr
 
@@ -209,6 +210,7 @@ object TCP:
       cb(Left(ConnectMapping.fromCode(connectRc)))
       None
     else
+      poller.metrics.connectStarted()
       // Cancellation finaliser: uv_close the in-flight handle, which makes connectCb fire with
       // UV_ECANCELED (its connectDeliver, seeing uv_is_closing, frees only the req) and the close
       // callback frees the handle.
@@ -223,26 +225,32 @@ object TCP:
     poller: LibUVPoller,
     handle: Ptr[Byte]
   ): (Int, Ptr[Byte]) => Unit =
+    // Settle the connect in the loop metrics exactly once: a cancelled handle is a cancellation, and
+    // every remaining path completes the callback, so wrapping it records success or failure in step.
+    val settledCb: Either[Throwable, TCPSocket] => Unit = result =>
+      poller.metrics.connectSettled(if result.isRight then OpOutcome.Succeeded else OpOutcome.Errored)
+      cb(result)
     (status, req) =>
       CallbackBridge.releaseReq(poller, req)
       stdlib.free(req)
-      if LibUV.uv_is_closing(handle) != 0 then () // cancelled: the finaliser uv_close'd the handle; cb is dead
+      if LibUV.uv_is_closing(handle) != 0 then poller.metrics.connectSettled(OpOutcome.Canceled) // cancelled: the finaliser uv_close'd the handle; cb is dead
       else if status < 0 then
         LibUV.uv_close(handle, freeHandleCb)
-        cb(Left(ConnectMapping.fromCode(status)))
+        settledCb(Left(ConnectMapping.fromCode(status)))
       else
         Socket.localAddressOf(handle) match
           case Left(rc) =>
             LibUV.uv_close(handle, freeHandleCb)
-            cb(Left(toConnectError(rc)))
+            settledCb(Left(toConnectError(rc)))
           case Right(local) =>
             Socket.peerAddressOf(handle) match
               case Left(rc) =>
                 LibUV.uv_close(handle, freeHandleCb)
-                cb(Left(toConnectError(rc)))
+                settledCb(Left(toConnectError(rc)))
               case Right(peer) =>
-                cb(Right(Socket.construct[SocketKind.TCP](handle, poller, local, peer)))
+                settledCb(Right(Socket.construct[SocketKind.TCP](handle, poller, local, peer)))
       end if
+  end connectDeliver
 
   private val connectCb: LibUV.ConnectCB = (req: Ptr[Byte], status: CInt) =>
     CallbackBridge.loadReq[(Int, Ptr[Byte]) => Unit](req).apply(status, req)

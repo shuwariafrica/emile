@@ -71,6 +71,11 @@ final private[emile] class LibUVPoller(val config: LoopConfig):
   // close() can uv_cancel any in-flight threadpool request and avoid a busy-spin / hang at shutdown.
   private[unsafe] val outstandingReqs: TrieMap[Long, Ptr[Byte]] = new TrieMap[Long, Ptr[Byte]]()
 
+  /** This loop's I/O operation counters, surfaced to cats-effect as its `PollerMetrics`. The emile
+    * operation sites update it on this loop thread; the metrics sampler reads it.
+    */
+  private[emile] val metrics: LibUVPollerMetrics = new LibUVPollerMetrics
+
   @volatile private[unsafe] var interrupted: Boolean = false
   @volatile private[unsafe] var closed: Boolean = false
 

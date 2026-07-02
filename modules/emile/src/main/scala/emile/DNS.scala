@@ -45,7 +45,9 @@ import emile.unsafe.Routing
 import emile.unsafe.SockAddr
 
 /** Forward and reverse name resolution over libuv's asynchronous `getaddrinfo` / `getnameinfo`.
-  * Resolution order follows the platform resolver.
+  * Resolution order follows the platform resolver. Lookups run on libuv's process-wide worker
+  * threadpool - shared with file I/O across every loop, four threads by default - so set
+  * `UV_THREADPOOL_SIZE` in the environment before startup when concurrent resolutions saturate it.
   */
 object DNS:
 

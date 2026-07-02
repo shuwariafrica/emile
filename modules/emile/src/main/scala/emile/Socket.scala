@@ -21,6 +21,7 @@ import scala.scalanative.libc.errno as libcErrno
 import scala.scalanative.libc.stdlib
 import scala.scalanative.posix.errno as posixErrno
 import scala.scalanative.posix.netinet.in
+import scala.scalanative.posix.netinet.tcp
 import scala.scalanative.posix.sys.socket as posixSocket
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
@@ -409,6 +410,11 @@ object Socket:
   private val readCb: LibUV.ReadCB = (handle: Ptr[Byte], nread: CSSize, buf: Ptr[LibUV.Buf]) =>
     CallbackBridge.load[ReadReceiver](handle).deliver(handle, nread, buf)
 
+  // Record a completed read delivery in the loop's metrics: data or a clean end-of-stream is a
+  // success, any other negative status a failure. Called from each receiver on the loop thread.
+  private def recordRead(socket: StreamSocketState, nreadInt: Int): Unit =
+    poller(socket).metrics.readSettled(nreadInt > 0 || nreadInt == ErrorCode.UV_EOF)
+
   // The single-reader guard wrapping each public read entry. The claim is taken on the owner thread and
   // released on every outcome; bracket takes it uncancelably, keeps the read itself cancelable, and skips
   // the release when the claim was not taken. The persistent reads stream uses readingResource for the
@@ -473,6 +479,7 @@ object Socket:
         if nread != 0 then
           stopRead(socket, handle)
           val nreadInt = nread.toInt
+          recordRead(socket, nreadInt)
           if nreadInt > 0 then cb(Right(Some(Chunk.fromBytePtr(buf._1, nreadInt))))
           else if nreadInt == ErrorCode.UV_EOF then cb(Right(None))
           else cb(Left(IOMapping.fromCode(nreadInt))),
@@ -540,6 +547,7 @@ object Socket:
         if nread != 0 then
           stopRead(socket, handle)
           val nreadInt = nread.toInt
+          recordRead(socket, nreadInt)
           if nreadInt > 0 then cb(Right(Some((buf._1, nreadInt))))
           else if nreadInt == ErrorCode.UV_EOF then cb(Right(None))
           else cb(Left(IOMapping.fromCode(nreadInt))),
@@ -593,6 +601,7 @@ object Socket:
       deliver = (handle, nread, buf) =>
         if nread != 0 then
           val nreadInt = nread.toInt
+          recordRead(state.socket, nreadInt)
           val item: Either[EmileError.IO, Option[Chunk[Byte]]] =
             if nreadInt > 0 then Right(Some(Chunk.fromBytePtr(buf._1, nreadInt)))
             else if nreadInt == ErrorCode.UV_EOF then Right(None)
@@ -647,31 +656,29 @@ object Socket:
   private def consumeAll[E](socket: StreamSocketState, onChunk: (Ptr[Byte], Int) => Either[E, Unit]): EmIO[EmileError.IO | E, Unit] =
     withReadingApp(socket)(consumeAllArm(socket, onChunk))
 
-  // The deliver's outcome (the app's E or a read error) rides the async's value channel as
-  // Either[union, Unit], staying distinct from a registration defect on the Throwable channel (folded
-  // to the EmileError.IO arm) - the two could not be told apart on one channel once E is erased.
+  // asyncAttempt carries the deliver's typed Either[union, Unit] outcome (the app's E or a read error) on
+  // its value channel and folds a registration defect onto the EmileError.IO arm - the two could not be
+  // told apart on one Throwable channel once E is erased.
   private def consumeAllArm[E](socket: StreamSocketState, onChunk: (Ptr[Byte], Int) => Either[E, Unit]): EmIO[EmileError.IO | E, Unit] =
-    EffIO.lift(
-      IO.async[Either[EmileError.IO | E, Unit]] { cb =>
-        Routing.onOwner(poller(socket)):
-          LiveHandle.tryUse(socket.live, closedConsume(cb)): handle =>
-            armReceiver(socket, handle, consumeReceiver(socket, cb, onChunk))
-            val rc = LibUV.uv_read_start(handle, allocCb, readCb)
-            if rc < 0 then
-              clearRead(socket, handle)
-              cb(Right(Left(IOMapping.fromCode(rc))))
-              None
-            else stopReadFinaliser(socket)
-      }.handleError(t => Left(EmileError.IO.Unexpected(t)))
-    )
+    EffIO.asyncAttempt[EmileError.IO | E, Unit](EmileError.IO.Unexpected(_)) { cb =>
+      Routing.onOwner(poller(socket)):
+        LiveHandle.tryUse(socket.live, closedConsume(cb)): handle =>
+          armReceiver(socket, handle, consumeReceiver(socket, cb, onChunk))
+          val rc = LibUV.uv_read_start(handle, allocCb, readCb)
+          if rc < 0 then
+            clearRead(socket, handle)
+            cb(Left(IOMapping.fromCode(rc)))
+            None
+          else stopReadFinaliser(socket)
+    }
 
-  private def closedConsume[E](cb: Either[Throwable, Either[EmileError.IO | E, Unit]] => Unit): Option[IO[Unit]] =
-    cb(Right(Left(EmileError.IO.AlreadyClosed)))
+  private def closedConsume[E](cb: Either[EmileError.IO | E, Unit] => Unit): Option[IO[Unit]] =
+    cb(Left(EmileError.IO.AlreadyClosed))
     Option.empty[IO[Unit]]
 
   private def consumeReceiver[E](
     socket: StreamSocketState,
-    cb: Either[Throwable, Either[EmileError.IO | E, Unit]] => Unit,
+    cb: Either[EmileError.IO | E, Unit] => Unit,
     onChunk: (Ptr[Byte], Int) => Either[E, Unit]
   ): ReadReceiver =
     ReadReceiver(
@@ -683,6 +690,7 @@ object Socket:
       deliver = (handle, nread, buf) =>
         if nread != 0 then
           val nreadInt = nread.toInt
+          recordRead(socket, nreadInt)
           if nreadInt > 0 then
             val outcome: Either[EmileError.IO | E, Unit] =
               try onChunk(buf._1, nreadInt)
@@ -691,15 +699,15 @@ object Socket:
               case Right(()) => () // keep the watcher armed for the next chunk
               case left =>
                 stopRead(socket, handle)
-                cb(Right(left))
+                cb(left)
           else if nreadInt == ErrorCode.UV_EOF then
             stopRead(socket, handle)
-            cb(Right(Right(())))
+            cb(Right(()))
           else
             stopRead(socket, handle)
-            cb(Right(Left(IOMapping.fromCode(nreadInt))))
+            cb(Left(IOMapping.fromCode(nreadInt)))
       ,
-      terminate = err => cb(Right(Left(err)))
+      terminate = err => cb(Left(err))
     )
 
   // Keeps the chunk reachable across the in-flight uv_write, and carries the poller the writeCb
@@ -766,7 +774,9 @@ object Socket:
         CallbackBridge.releaseReq(poller(socket), req)
         stdlib.free(req)
         cb(Left(IOMapping.fromCode(rc)))
-      else socket.pendingWrites += 1
+      else
+        socket.pendingWrites += 1
+        poller(socket).metrics.writeStarted()
   end submitWrite
 
   private val writeCb: LibUV.WriteCB = (req: Ptr[Byte], status: CInt) =>
@@ -774,6 +784,7 @@ object Socket:
     CallbackBridge.releaseReq(state.poller, req)
     stdlib.free(req)
     state.socket.pendingWrites -= 1
+    state.poller.metrics.writeSettled(status)
     if status < 0 then state.cb(Left(IOMapping.fromCode(status)))
     else state.cb(Right(()))
 
@@ -838,7 +849,9 @@ object Socket:
       CallbackBridge.releaseReq(poller(socket), req)
       stdlib.free(req)
       cb(Left(IOMapping.fromCode(rc)))
-    else socket.pendingWrites += 1
+    else
+      socket.pendingWrites += 1
+      poller(socket).metrics.writeStarted()
   end writeVectored
 
   private def allocBufs(nbufs: Int): Ptr[LibUV.Buf] =
@@ -981,6 +994,38 @@ object Socket:
 
   private def resultOf(rc: Int): Either[EmileError.IO, Unit] =
     if rc < 0 then Left(IOMapping.fromCode(rc)) else Right(())
+
+  /** The live `TCP_NODELAY` state, read through `getsockopt` - the read counterpart to
+    * [[setNoDelay]], surfaced by the fs2 interop layer's `getOption`.
+    */
+  private[emile] def readNoDelay(socket: TCPSocket): EmIO[EmileError.IO, Boolean] =
+    optionBool(socket, in.IPPROTO_TCP, tcp.TCP_NODELAY)
+
+  /** Whether `SO_KEEPALIVE` is enabled, read through `getsockopt`. Reports only the on/off flag,
+    * not the idle/interval/count that [[setKeepAlive]] configures; surfaced by the fs2 interop
+    * layer.
+    */
+  private[emile] def readKeepAlive(socket: TCPSocket): EmIO[EmileError.IO, Boolean] =
+    optionBool(socket, posixSocket.SOL_SOCKET, posixSocket.SO_KEEPALIVE)
+
+  private def optionBool(socket: StreamSocketState, level: Int, option: Int): EmIO[EmileError.IO, Boolean] =
+    EffIO.lift(Routing.onOwner(poller(socket))(LiveHandle.tryUse(socket.live, closedBoolOption)(readOptionBool(_, level, option))))
+
+  private val closedBoolOption: Either[EmileError.IO, Boolean] = Left(EmileError.IO.AlreadyClosed)
+
+  // getsockopt on the socket's fd - TCP_NODELAY and SO_KEEPALIVE are always valid on a stream socket,
+  // so a failure is a genuine typed error. -errno is the libuv-style code IOMapping expects.
+  private def readOptionBool(handle: Ptr[Byte], level: Int, option: Int): Either[EmileError.IO, Boolean] =
+    val fdCell = stackalloc[CInt]()
+    val rc1 = LibUV.uv_fileno(handle, fdCell)
+    if rc1 < 0 then Left(IOMapping.fromCode(rc1))
+    else
+      val cell = stackalloc[CInt]()
+      val len = stackalloc[posixSocket.socklen_t]()
+      !len = sizeof[CInt].toUInt
+      val rc2 = posixSocket.getsockopt(!fdCell, level, option, cell.asInstanceOf[CVoidPtr], len)
+      if rc2 < 0 then Left(IOMapping.fromCode(-libcErrno.errno))
+      else Right((!cell) != 0)
 
   private def shutdownWrite(socket: StreamSocketState): IO[Unit] =
     IO.async[Unit]: cb =>
