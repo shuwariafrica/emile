@@ -50,6 +50,15 @@ final class TCPCloseResetSpec extends EmileSuite:
       .timeout(5.seconds)
   }
 
+  test("closeReset terminates a concurrent in-flight read with AlreadyClosed rather than hanging it") {
+    TCP
+      .bind(anyLoopback)
+      .widen[EmileError]
+      .use(server => EffIO.liftF(resetTerminatesRead(server)))
+      .absolve
+      .timeout(5.seconds)
+  }
+
   private def resetThenReadClosed(server: TCPServer): IO[Unit] =
     TCP
       .connect(server.address)
@@ -91,6 +100,35 @@ final class TCPCloseResetSpec extends EmileSuite:
             case Left(EmileError.IO.ConnectionReset) => ()
             case other => fail(s"expected the peer to observe ConnectionReset, got: $other")
         )
+    }
+
+  // The peer sends nothing, so the client's read stays armed and blocked; closeReset on the same
+  // socket must fire the read's continuation (AlreadyClosed) rather than stop the read and leave it
+  // waiting forever. joinWithNever would never return if the read hung, so the outer timeout fails it.
+  private def resetTerminatesRead(server: TCPServer): IO[Unit] =
+    IO.deferred[Unit].flatMap { accepted =>
+      val hold: IO[Unit] =
+        server.accepted.evalMap(_.use(_ => EffIO.liftF(accepted.complete(()).void *> IO.never[Unit]))).head.compile.drain.absolve
+      hold.background.use(_ =>
+        TCP
+          .connect(server.address)
+          .widen[EmileError]
+          .use(socket =>
+            EffIO.liftF(
+              for
+                _ <- accepted.get
+                blocked <- socket.read(4096).either.start
+                _ <- IO.sleep(150.millis)
+                _ <- socket.closeReset.absolve
+                result <- blocked.joinWithNever.timeout(3.seconds)
+                _ <- IO(
+                       assertEquals(result, Left(EmileError.IO.AlreadyClosed): Either[EmileError.IO, Option[fs2.Chunk[Byte]]])
+                     )
+              yield ()
+            )
+          )
+          .absolve
+      )
     }
 
 end TCPCloseResetSpec

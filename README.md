@@ -105,10 +105,9 @@ receive-only); `closeReset` (TCP only) aborts the connection with a RST rather t
 queued output. Concurrent writes from different fibres are safe but their relative order is unspecified; batch them
 into one `write(chunks)` or use a single writer where order matters.
 
-`socket.onLoop[A](thunk: => A)` submits a synchronous step to the socket's owning loop thread - the public face of
-emile's worker-affinity routing, useful for thread-confining a piece of C state (e.g. an nghttp2 `nghttp2_session`)
-alongside its read trampoline. Keep `thunk` short and non-blocking: it runs on the loop thread and stalls all I/O on
-that worker until it returns.
+`socket.onLoop` runs a synchronous step on the socket's owning loop thread - where thread-unsafe C state such as an
+nghttp2 session must live, since that is the one thread driving the socket's I/O. Keep it short and non-blocking: it
+stalls that worker's I/O until it returns.
 
 ### IPC (Unix-domain sockets)
 
@@ -144,6 +143,37 @@ server.chmod(IPCMode.ReadWrite) // EmIO[EmileError.IO, Unit] - set the socket fi
 `peerCredentials` reads the connected peer through `SO_PEERCRED`, for a server to authorise a local client. `chmod`
 applies to a `Path` server only; connecting needs write access, so `Writable` or `ReadWrite` opens a server to other
 local users.
+
+### Serving connections
+
+`server.serve` runs a complete accept-and-handle loop with graceful shutdown - the piece that is genuinely hard to
+assemble from raw fs2. It works for both `TCP` and `IPC` servers.
+
+```scala
+import cats.effect.{Deferred, IO}
+import emile.*
+
+// A signal the caller completes to begin a graceful stop.
+Deferred[IO, Unit].flatMap: shutdown =>
+  val echo = (socket: TCPSocket) => socket.reads.through(socket.writes).compile.drain
+  server.serve(4096, shutdown.get)(err => IO.println(s"connection failed: $err"))(echo)
+```
+
+Up to `maxConcurrent` handlers run at once. A failure in one handler - or in the accept loop - is reported through
+`onError` without stopping the server or its siblings; a handler defect arrives there too, as `EmileError.IO.Unexpected`
+(`onError`'s argument is the [union channel](#bringing-your-own-error-type)). Completing `shutdown` stops accepting and
+**drains** - in-flight handlers run to completion, they are not cancelled - so a handler that never finishes holds
+shutdown open; bound it with `.timeout` where needed. The socket is released when its handler finishes. For a server
+that stops on the first failure, compose `accepted` directly, as in the [opening example](#émile).
+
+`Socket.proxy(a, b)` splices two connected sockets into a bidirectional pipe for reverse-proxy and sidecar work. Each
+direction is copied, and a half-close on one side is propagated to the other, so a client shutdown reaches the
+upstream; the pipe completes once both directions close. The two sockets may be of different kinds - a TCP front
+spliced to an `IPC` backend.
+
+```scala
+Socket.proxy(frontConnection, backendConnection): EmIO[EmileError.IO, Unit]
+```
 
 ### Timer
 
@@ -283,6 +313,29 @@ The companion stream and resource aliases follow the same shape:
 | `EmStream[+E, +A]`     | `Stream[EffIO.Of[E], A]` | covariant |
 | `EmResource[E, A]`     | `Resource[EffIO.Of[E], A]` | invariant (widen with `r.widen[E2]`) |
 | `EmPipe[E, -I, +O]`    | `Pipe[EffIO.Of[E], I, O]` | invariant; apply with `through` |
+
+### Bringing your own error type
+
+`readPtr`, `consume`, `onLoop`, and `serve` take a callback that fails with an error of your choosing - any `Throwable`,
+so an ADT extending `Exception`. emile keeps that error and its own on the union channel `EmileError.IO | E`, which you
+match arm by arm and which stays `.absolve`-able throughout:
+
+```scala
+enum AppError extends Exception:
+  case Rejected
+  case Malformed(at: Int)
+
+val consumed: EmIO[EmileError.IO | AppError, Unit] =
+  socket.consume((ptr, len) => if len > 0 then Right(()) else Left(AppError.Rejected))
+
+consumed.either.map:
+  case Left(io: EmileError.IO) => // a socket read failed
+  case Left(app: AppError)     => // onChunk returned Left
+  case Right(())               => // reached end of input
+```
+
+Since `EmileError.IO | EmileError.IO` is just `EmileError.IO`, a callback whose own errors are `EmileError.IO` leaves
+you a plain `EmIO[EmileError.IO, A]` to match - no union to unwrap.
 
 ## Loop tuning
 

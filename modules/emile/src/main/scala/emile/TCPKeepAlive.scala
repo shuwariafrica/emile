@@ -19,7 +19,8 @@ import scala.concurrent.duration.FiniteDuration
 
 /** TCP keep-alive parameters - idle period, probe spacing, and probe count. `idle` and `interval`
   * must each be at least one second and `count` at least one, or applying it fails with
-  * [[EmileError.IO.InvalidArgument]]. Constructed through [[TCPKeepAlive$ TCPKeepAlive]].
+  * [[EmileError.IO.InvalidArgument]]; both are applied at whole-second granularity (truncated).
+  * Constructed through [[TCPKeepAlive$ TCPKeepAlive]].
   *
   * @param idle the `TCP_KEEPIDLE` window - the connection's idle period before the first probe
   * @param interval the `TCP_KEEPINTVL` spacing between probes
@@ -34,7 +35,10 @@ final case class TCPKeepAlive(
 /** Presets and constants for [[TCPKeepAlive]]. */
 object TCPKeepAlive:
 
-  /** The [[simple]] preset's probe count - the Linux kernel's own `TCP_KEEPCNT` default of 9. */
+  /** The [[simple]] preset's probe count - conservative, so a brief network blip does not drop a
+    * healthy connection: nine unanswered probes at the chosen interval must all fail before the
+    * peer is declared dead.
+    */
   inline val DefaultProbeCount = 9
 
   /** A keep-alive whose idle and probe-interval windows are both `after`, with the default probe

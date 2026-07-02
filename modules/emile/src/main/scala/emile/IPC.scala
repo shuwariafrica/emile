@@ -91,7 +91,7 @@ object IPC:
   private def connectRaw(address: IPCAddress): EmIO[EmileError.Connect, IPCSocket] =
     address match
       case IPCAddress.Autobind =>
-        EffIO.fail(EmileError.Connect.Unexpected(new IllegalArgumentException("emile: IPCAddress.Autobind is bind-only")))
+        EffIO.fail(EmileError.Connect.InvalidAddress("IPCAddress.Autobind is bind-only; use IPC.bind for an unnamed listener"))
       case named =>
         EffIO.attempt(
           for

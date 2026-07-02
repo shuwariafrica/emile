@@ -67,6 +67,11 @@ object StreamServer:
   inline def chmod(server: IPCServer, mode: IPCMode): EmIO[EmileError.IO, Unit] =
     server.chmod(mode)
 
+  inline def serve[K <: SocketKind, E <: Throwable](server: StreamServer[K], maxConcurrent: Int, shutdown: IO[Unit])(
+    onError: (EmileError.IO | E) => IO[Unit]
+  )(handler: Socket[K] => EmIO[E, Unit]): EmIO[Nothing, Unit] =
+    server.serve(maxConcurrent, shutdown)(onError)(handler)
+
   /** The per-kind accept strategy a [[StreamServer]] is built with - how to allocate, initialise,
     * and address a client handle, and the post-accept `finish` step (the TCP tuning; nothing for
     * IPC). Built once at bind by the transport entry ([[TCP$ TCP]] / [[IPC$ IPC]]) and carried in
@@ -108,6 +113,20 @@ object StreamServer:
       Resource
         .makeFull[EffIO.Of[EmileError.IO], Socket[K]](poll => poll(acceptNext(server)))(socket => EffIO.liftF(Socket.release(socket)))
         .evalTap(socket => server.acceptor.finish(socket))
+
+    /** Accepts connections and runs `handler` on each, up to `maxConcurrent` at a time, until
+      * `shutdown` completes; the socket is released when its handler returns. The server is
+      * resilient - one connection never brings down the rest: a failing handler, a failed accept,
+      * or a handler defect goes to `onError` (a defect as `EmileError.IO.Unexpected`) and the loop
+      * carries on. `shutdown` drains rather than cancels, letting in-flight handlers finish before
+      * the effect returns, so a handler that never returns holds shutdown open. Compose
+      * [[accepted]] directly for a server that stops on the first failure.
+      */
+    @targetName("ext_serve")
+    def serve[E <: Throwable](maxConcurrent: Int, shutdown: IO[Unit])(onError: (EmileError.IO | E) => IO[Unit])(
+      handler: Socket[K] => EmIO[E, Unit]
+    ): EmIO[Nothing, Unit] =
+      serveLoop(server, maxConcurrent, shutdown, onError, handler)
 
   end extension
 
@@ -176,6 +195,78 @@ object StreamServer:
     case IPCMode.Readable => LibUV.UV_READABLE
     case IPCMode.Writable => LibUV.UV_WRITABLE
     case IPCMode.ReadWrite => LibUV.UV_READABLE | LibUV.UV_WRITABLE
+
+  // serve accepts one connection at a time in the stream source and runs handlers concurrently
+  // downstream. On shutdown the source ends normally, so parEvalMapUnordered drains its in-flight
+  // handlers to completion rather than cancelling them - the graceful-shutdown contract.
+  private def serveLoop[K <: SocketKind, E](
+    server: StreamServer[K],
+    maxConcurrent: Int,
+    shutdown: IO[Unit],
+    onError: (EmileError.IO | E) => IO[Unit],
+    handler: Socket[K] => EmIO[E, Unit]
+  ): EmIO[Nothing, Unit] =
+    // maxConcurrent < 1 is a programmer error, not a runtime condition - a defect, not an isolated error.
+    EffIO.liftF(
+      IO.raiseWhen(maxConcurrent < 1)(new IllegalArgumentException("serve maxConcurrent must be at least 1")) *>
+        Stream
+          .repeatEval(acceptSocketOrHalt(server, shutdown, onError))
+          .unNoneTerminate
+          .parEvalMapUnordered(maxConcurrent)(socket => handleConnection(socket, handler, onError))
+          .compile
+          .drain
+    )
+
+  // One accepted socket, or None once shutdown fires. An accept error is reported and accepting
+  // continues; the kind's finish step (TCP tuning) runs before the socket is handed on.
+  private def acceptSocketOrHalt[K <: SocketKind, E](
+    server: StreamServer[K],
+    shutdown: IO[Unit],
+    onError: (EmileError.IO | E) => IO[Unit]
+  ): IO[Option[Socket[K]]] =
+    acceptCommit(server, shutdown).flatMap {
+      case Left(None) => IO.pure(None)
+      case Left(Some(error)) => onError(error) *> acceptSocketOrHalt(server, shutdown, onError)
+      case Right(socket) =>
+        server.acceptor.finish(socket).either.flatMap {
+          case Right(()) => IO.pure(Some(socket))
+          case Left(error) => Socket.release(socket) *> onError(error) *> acceptSocketOrHalt(server, shutdown, onError)
+        }
+    }
+
+  // Races shutdown against a connection signal, committing to the accept only once a signal is in hand,
+  // so a shutdown that wins the race never strands an already-produced socket. Left(None) = shutdown,
+  // Left(Some) = accept error, Right = accepted.
+  private def acceptCommit[K <: SocketKind](
+    server: StreamServer[K],
+    shutdown: IO[Unit]
+  ): IO[Either[Option[EmileError.IO], Socket[K]]] =
+    IO.uncancelable { poll =>
+      poll(IO.race(shutdown, server.connections.take)).flatMap {
+        case Left(()) => IO.pure(Left(None))
+        case Right(Left(error)) => IO.pure(Left(Some(error)))
+        case Right(Right(())) =>
+          Routing.onOwner(server.poller)(performAccept(server)).map {
+            case Left(error) => Left(Some(error))
+            case Right(socket) => Right(socket)
+          }
+      }
+    }
+
+  // Runs one connection's handler, isolating a typed failure (the E arm) or a defect (the
+  // EmileError.IO arm) to onError, and releasing the socket afterwards regardless of outcome.
+  private def handleConnection[K <: SocketKind, E](
+    socket: Socket[K],
+    handler: Socket[K] => EmIO[E, Unit],
+    onError: (EmileError.IO | E) => IO[Unit]
+  ): IO[Unit] =
+    handler(socket).either.attempt
+      .flatMap {
+        case Right(Right(())) => IO.unit
+        case Right(Left(error)) => onError(error)
+        case Left(defect) => onError(EmileError.IO.Unexpected(defect))
+      }
+      .guarantee(Socket.release(socket))
 
   // FFI: client handle calloc with throw-on-OOM, uv_close cleanup of a half-built client.
   // scalafix:off DisableSyntax
