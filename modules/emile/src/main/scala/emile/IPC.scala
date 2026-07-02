@@ -206,25 +206,23 @@ object IPC:
     poller: LibUVPoller,
     handle: Ptr[Byte]
   ): (Int, Ptr[Byte]) => Unit =
-    // Settle the connect in the loop metrics exactly once: a cancelled handle is a cancellation, and
-    // every remaining path completes the callback, so wrapping it records success or failure in step.
-    val settledCb: Either[Throwable, IPCSocket] => Unit = result =>
-      poller.metrics.connectSettled(if result.isRight then OpOutcome.Succeeded else OpOutcome.Errored)
-      cb(result)
     (status, req) =>
       CallbackBridge.releaseReq(poller, req)
       stdlib.free(req)
       if LibUV.uv_is_closing(handle) != 0 then poller.metrics.connectSettled(OpOutcome.Canceled) // cancelled: the finaliser uv_close'd the handle; cb is dead
       else if status < 0 then
         LibUV.uv_close(handle, freeHandleCb)
-        settledCb(Left(ConnectMapping.fromCode(status)))
+        poller.metrics.connectSettled(OpOutcome.Errored)
+        cb(Left(ConnectMapping.fromCode(status)))
       else
         captureConnectAddresses(handle) match
           case Left(error) =>
             LibUV.uv_close(handle, freeHandleCb)
-            settledCb(Left(error))
+            poller.metrics.connectSettled(OpOutcome.Errored)
+            cb(Left(error))
           case Right((local, peer)) =>
-            settledCb(Right(Socket.construct[SocketKind.IPC](handle, poller, local, peer)))
+            poller.metrics.connectSettled(OpOutcome.Succeeded)
+            cb(Right(Socket.construct[SocketKind.IPC](handle, poller, local, peer)))
   end connectDeliver
 
   private val connectCb: LibUV.ConnectCB = (req: Ptr[Byte], status: CInt) =>
