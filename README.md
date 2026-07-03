@@ -133,6 +133,9 @@ surface documented under [TCP](#tcp) (`reads`, `writes`, `read`, `sendFile`, the
 | `Abstract(name)` | a Linux abstract-namespace name - no filesystem entry, no residue                        |
 | `Autobind`       | bind only: the kernel assigns an abstract name, reported back as `Abstract` once bound   |
 
+A name longer than the platform `sun_path` limit (about 108 bytes) is rejected, not silently bound to a truncated,
+different socket.
+
 Two operations are IPC-only:
 
 ```scala
@@ -143,6 +146,11 @@ server.chmod(IPCMode.ReadWrite) // EmIO[EmileError.IO, Unit] - set the socket fi
 `peerCredentials` reads the connected peer through `SO_PEERCRED`, for a server to authorise a local client. `chmod`
 applies to a `Path` server only; connecting needs write access, so `Writable` or `ReadWrite` opens a server to other
 local users.
+
+To harden a socket from the outset, set the mode at bind - `IPC.bind(path, IPCOptions(mode = Some(IPCMode.Readable),
+listenBacklog = 128))` applies it before the server listens, so the socket is never briefly reachable at a wider mode;
+`server.chmod` re-sets it on an already-bound server. A mode on an abstract or autobind address (which has no socket
+file) is rejected.
 
 ### Serving connections
 

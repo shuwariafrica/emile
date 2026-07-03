@@ -95,6 +95,77 @@ final class IPCSpec extends EmileSuite:
       .timeout(5.seconds)
   }
 
+  test("an operation on a released server fails with AlreadyClosed, not a use-after-free") {
+    IPC
+      .bind(uniqueAbstract)
+      .use(server => EffIO.succeed(server))
+      .absolve
+      .flatMap(leaked =>
+        leaked.chmod(IPCMode.ReadWrite).either.map {
+          case Left(EmileError.IO.AlreadyClosed) => ()
+          case other => fail(s"expected AlreadyClosed, got: $other")
+        }
+      )
+      .timeout(5.seconds)
+  }
+
+  test("bind rejects a name longer than the sun_path limit rather than truncating it") {
+    IPC
+      .bind(IPCAddress.Path("a" * 200))
+      .use(_ => EffIO.succeed(()))
+      .either
+      .map {
+        case Left(EmileError.Bind.InvalidAddress(_)) => ()
+        case other => fail(s"expected Bind.InvalidAddress, got: $other")
+      }
+      .timeout(5.seconds)
+  }
+
+  test("connect rejects a name longer than the sun_path limit rather than truncating it") {
+    IPC
+      .connect(IPCAddress.Path("a" * 200))
+      .use(_ => EffIO.succeed(()))
+      .either
+      .map {
+        case Left(EmileError.Connect.InvalidAddress(_)) => ()
+        case other => fail(s"expected Connect.InvalidAddress, got: $other")
+      }
+      .timeout(5.seconds)
+  }
+
+  test("connect rejects an empty path") {
+    IPC
+      .connect(IPCAddress.Path(""))
+      .use(_ => EffIO.succeed(()))
+      .either
+      .map {
+        case Left(EmileError.Connect.InvalidAddress(_)) => ()
+        case other => fail(s"expected Connect.InvalidAddress, got: $other")
+      }
+      .timeout(5.seconds)
+  }
+
+  test("a bound socket mode is applied before the server accepts, blocking a wider connect") {
+    // The socket is bound read-only, so a connect - which needs write access - is refused; that the
+    // refusal holds inside the server's scope proves the mode was set during acquire, before listening.
+    // Relies on the non-root test process (root bypasses the file-permission check).
+    tempSocketPath
+      .use(path =>
+        IPC
+          .bind(IPCAddress.Path(path), IPCOptions(Some(IPCMode.Readable), 128))
+          .use(_ =>
+            EffIO.liftF(
+              IPC.connect(IPCAddress.Path(path)).use(_ => EffIO.succeed(())).either.map {
+                case Left(EmileError.Connect.PermissionDenied) => ()
+                case other => fail(s"expected Connect.PermissionDenied, got: $other")
+              }
+            )
+          )
+          .absolve
+      )
+      .timeout(5.seconds)
+  }
+
   private def echoRoundTrip(server: IPCServer, payload: Chunk[Byte]): IO[Unit] =
     val srvWork: IO[Unit] =
       server.accepted

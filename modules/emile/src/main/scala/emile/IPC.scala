@@ -39,18 +39,23 @@ import emile.unsafe.Routing
   */
 object IPC:
 
-  /** The `listen(2)` backlog for an [[IPCServer]]. */
-  inline val ListenBacklog = 128
-
-  // sun_path caps near 108 bytes and libuv truncates a longer name, so 256 holds any usable name.
+  // sun_path holds a name of at most 108 bytes on Linux; libuv is asked (UV_PIPE_NO_TRUNCATE) to reject
+  // a longer name rather than truncate it to a different socket, and emile rejects it first with a typed
+  // error. A validated name is at most this many bytes, so the copy buffer below comfortably holds it.
+  private inline val SunPathMax = 108
   private inline val NameMax = 256
 
-  /** Bind a listening server on `address`. Binding and listening complete during acquire, so every
-    * failure surfaces here rather than later on the accept stream. A filesystem-path server removes
-    * its socket file on release (libuv unlinks it on close).
-    */
+  /** Bind a listening server on `address` with the default [[IPCOptions]]. */
   def bind(address: IPCAddress): EmResource[EmileError.Bind, IPCServer] =
-    Resource.make[EffIO.Of[EmileError.Bind], IPCServer](bindAcquire(address))(server => EffIO.liftF(StreamServer.release(server)))
+    bind(address, IPCOptions.default)
+
+  /** Bind a listening server on `address` with `options`. Binding, any socket-file mode, and
+    * listening all complete during acquire, so every failure surfaces here rather than later on the
+    * accept stream, and a requested mode is applied before the server ever accepts. A
+    * filesystem-path server removes its socket file on release (libuv unlinks it on close).
+    */
+  def bind(address: IPCAddress, options: IPCOptions): EmResource[EmileError.Bind, IPCServer] =
+    Resource.make[EffIO.Of[EmileError.Bind], IPCServer](bindAcquire(address, options))(server => EffIO.liftF(StreamServer.release(server)))
 
   /** Connect to the server at `address`. The connect is cancelable: a `timeout` or cancellation
     * aborts the in-flight `uv_pipe_connect2` and frees the handle. [[IPCAddress.Autobind]] is
@@ -70,37 +75,59 @@ object IPC:
       finish = _ => EffIO.succeed(())
     )
 
-  private def bindAcquire(address: IPCAddress): EmIO[EmileError.Bind, IPCServer] =
-    address match
-      // An empty path would encode to a zero-length name, which on Linux is autobind - a silent
-      // surprise rather than the requested bind. Reject it; IPCAddress.Autobind is the explicit way.
-      case IPCAddress.Path(p) if p.isEmpty =>
-        EffIO.fail(
-          EmileError.Bind.InvalidAddress("emile: an IPC bind path must be non-empty; use IPCAddress.Autobind for an unnamed listener")
-        )
-      case _ =>
+  private def bindAcquire(address: IPCAddress, options: IPCOptions): EmIO[EmileError.Bind, IPCServer] =
+    validateBind(address, options) match
+      case Some(detail) => EffIO.fail(EmileError.Bind.InvalidAddress(detail))
+      case None =>
         EffIO.attempt(
           for
             poller <- LibUVPollingSystem.currentPoller
             queue <- UnboundedQueue[IO, Either[EmileError.IO, Unit]]
-            result <- Routing.onOwner(poller)(bindInstall(poller, address, queue))
+            result <- Routing.onOwner(poller)(bindInstall(poller, address, options, queue))
             server <- IO.fromEither(result)
           yield server,
           EmileError.Bind.Unexpected(_)
         )
 
   private def connectRaw(address: IPCAddress): EmIO[EmileError.Connect, IPCSocket] =
-    address match
-      case IPCAddress.Autobind =>
-        EffIO.fail(EmileError.Connect.InvalidAddress("IPCAddress.Autobind is bind-only; use IPC.bind for an unnamed listener"))
-      case named =>
+    validateConnect(address) match
+      case Some(detail) => EffIO.fail(EmileError.Connect.InvalidAddress(detail))
+      case None =>
         EffIO.attempt(
           for
             poller <- LibUVPollingSystem.currentPoller
-            socket <- performConnect(poller, named)
+            socket <- performConnect(poller, address)
           yield socket,
           EmileError.Connect.Unexpected(_)
         )
+
+  // The wire-form byte length writeName will produce, checked against SunPathMax before bind/connect so a
+  // name too long for sun_path is rejected rather than truncated to a different socket.
+  private def wireNameLength(address: IPCAddress): Int = address match
+    case IPCAddress.Path(value) => value.getBytes(StandardCharsets.UTF_8).length
+    case IPCAddress.Abstract(name) => 1 + name.getBytes(StandardCharsets.UTF_8).length
+    case IPCAddress.Autobind => 0
+
+  private def isFilesystemPath(address: IPCAddress): Boolean = address match
+    case IPCAddress.Path(value) => value.nonEmpty
+    case _ => false
+
+  private val nameTooLong: String = s"an IPC name must be at most $SunPathMax bytes, the sun_path limit"
+
+  private def validateBind(address: IPCAddress, options: IPCOptions): Option[String] =
+    // An empty path encodes to a zero-length name, which on Linux is autobind - a silent surprise rather
+    // than the requested bind; IPCAddress.Autobind is the explicit way.
+    if address == IPCAddress.Path("") then Some("an IPC bind path must be non-empty; use IPCAddress.Autobind for an unnamed listener")
+    else if wireNameLength(address) > SunPathMax then Some(nameTooLong)
+    else if options.mode.isDefined && !isFilesystemPath(address) then
+      Some("a socket mode applies only to a filesystem-path server; an abstract or autobind socket has no file to chmod")
+    else None
+
+  private def validateConnect(address: IPCAddress): Option[String] =
+    if address == IPCAddress.Autobind then Some("IPCAddress.Autobind is bind-only; use IPC.bind for an unnamed listener")
+    else if address == IPCAddress.Path("") then Some("an IPC connect path must be non-empty")
+    else if wireNameLength(address) > SunPathMax then Some(nameTooLong)
+    else None
 
   private def captureIpcAddresses(handle: Ptr[Byte]): Either[EmileError.IO, (Matchable, Matchable)] =
     for
@@ -120,6 +147,7 @@ object IPC:
   private def bindInstall(
     poller: LibUVPoller,
     address: IPCAddress,
+    options: IPCOptions,
     queue: UnboundedQueue[IO, Either[EmileError.IO, Unit]]
   ): Either[EmileError.Bind, IPCServer] =
     val handle = stdlib.calloc(1.toCSize, LibUV.uv_handle_size(LibUV.UV_NAMED_PIPE))
@@ -128,17 +156,18 @@ object IPC:
     if initRc != 0 then
       stdlib.free(handle)
       Left(BindMapping.fromCode(initRc))
-    else bindAndListen(poller, handle, address, queue)
+    else bindAndListen(poller, handle, address, options, queue)
 
   private def bindAndListen(
     poller: LibUVPoller,
     handle: Ptr[Byte],
     address: IPCAddress,
+    options: IPCOptions,
     queue: UnboundedQueue[IO, Either[EmileError.IO, Unit]]
   ): Either[EmileError.Bind, IPCServer] =
     val buf = stackalloc[Byte](NameMax)
     val namelen = writeName(address, buf)
-    val bindRc = LibUV.uv_pipe_bind2(handle, buf, namelen, 0.toUInt)
+    val bindRc = LibUV.uv_pipe_bind2(handle, buf, namelen, LibUV.UV_PIPE_NO_TRUNCATE.toUInt)
     if bindRc != 0 then
       LibUV.uv_close(handle, freeHandleCb)
       Left(BindMapping.fromCode(bindRc))
@@ -151,14 +180,31 @@ object IPC:
           // construct stores the server in the handle's `data` slot before uv_listen activates, so a
           // connection_cb never fires on an unstored handle.
           val server = StreamServer.construct[SocketKind.IPC](handle, poller, local, queue, ipcAcceptor)
-          val listenRc = LibUV.uv_listen(handle, ListenBacklog, StreamServer.connectionCb)
-          if listenRc != 0 then
-            CallbackBridge.clear(poller, handle)
-            LibUV.uv_close(handle, freeHandleCb)
-            Left(BindMapping.fromCode(listenRc))
-          else Right(server)
-    end if
+          hardenThenListen(poller, handle, options, server)
   end bindAndListen
+
+  // chmod runs before uv_listen so a hardened socket is never briefly reachable at a wider mode;
+  // validateBind has already guaranteed a mode is set only for a filesystem-path address, where
+  // uv_pipe_chmod applies.
+  private def hardenThenListen(
+    poller: LibUVPoller,
+    handle: Ptr[Byte],
+    options: IPCOptions,
+    server: IPCServer
+  ): Either[EmileError.Bind, IPCServer] =
+    val chmodRc = options.mode match
+      case Some(mode) => StreamServer.chmodHandle(handle, mode)
+      case None => 0
+    if chmodRc != 0 then closeAfterListenFailure(poller, handle, chmodRc)
+    else
+      val listenRc = LibUV.uv_listen(handle, options.listenBacklog, StreamServer.connectionCb)
+      if listenRc != 0 then closeAfterListenFailure(poller, handle, listenRc)
+      else Right(server)
+
+  private def closeAfterListenFailure(poller: LibUVPoller, handle: Ptr[Byte], rc: Int): Either[EmileError.Bind, IPCServer] =
+    CallbackBridge.clear(poller, handle)
+    LibUV.uv_close(handle, freeHandleCb)
+    Left(BindMapping.fromCode(rc))
 
   private def performConnect(poller: LibUVPoller, address: IPCAddress): IO[IPCSocket] =
     IO.async[IPCSocket] { cb =>
@@ -183,7 +229,7 @@ object IPC:
     CallbackBridge.storeReq(poller, req, connectDeliver(cb, poller, handle))
     val buf = stackalloc[Byte](NameMax)
     val namelen = writeName(address, buf)
-    val connectRc = LibUV.uv_pipe_connect2(req, handle, buf, namelen, 0.toUInt, connectCb)
+    val connectRc = LibUV.uv_pipe_connect2(req, handle, buf, namelen, LibUV.UV_PIPE_NO_TRUNCATE.toUInt, connectCb)
     if connectRc != 0 then
       CallbackBridge.releaseReq(poller, req)
       stdlib.free(req)
@@ -248,8 +294,8 @@ object IPC:
 
   // Writes the bind2/connect2 wire form of `address` into `buf` and returns its byte length. Path ->
   // the path bytes (filesystem); Abstract -> a leading NUL then the name (Linux abstract namespace);
-  // Autobind -> a leading NUL with zero length (Linux autobind). libuv truncates an over-long name,
-  // mirrored by bounding the copy to the buffer.
+  // Autobind -> a leading NUL with zero length (Linux autobind). The caller has already rejected a name
+  // longer than sun_path; the copy stays bounded to the buffer as a backstop.
   private def writeName(address: IPCAddress, buf: Ptr[Byte]): CSize =
     address match
       case IPCAddress.Path(value) => copyBytes(value.getBytes(StandardCharsets.UTF_8), buf, 0)
