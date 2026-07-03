@@ -84,11 +84,15 @@ private[emile] object LibUV:
   inline val UV_LOOP_BLOCK_SIGNAL = 0
   inline val UV_LOOP_USE_IO_URING_SQPOLL = 2
 
-  // uv_poll_event.
+  // uv_poll_event. UV_READABLE / UV_WRITABLE double as the uv_pipe_chmod access flags.
   inline val UV_READABLE = 1
   inline val UV_WRITABLE = 2
   inline val UV_DISCONNECT = 4
   inline val UV_PRIORITIZED = 8
+
+  // uv_pipe_bind2 / uv_pipe_connect2 flag: reject a name longer than sun_path rather than truncating
+  // it to a different socket.
+  inline val UV_PIPE_NO_TRUNCATE = 1
 
   // uv_fs_event.
   inline val UV_RENAME = 1

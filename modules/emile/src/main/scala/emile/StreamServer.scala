@@ -23,17 +23,19 @@ import scala.scalanative.unsigned.*
 import boilerplate.effect.EffIO
 import cats.effect.IO
 import cats.effect.Resource
+import cats.effect.std.Semaphore
+import cats.effect.std.Supervisor
 import cats.effect.std.unsafe.UnboundedQueue
 import fs2.Stream
 
 import emile.unsafe.CallbackBridge
 import emile.unsafe.LibUV
 import emile.unsafe.LibUVPoller
+import emile.unsafe.LiveHandle
 import emile.unsafe.Routing
 
 final private[emile] class StreamServerState(
-  val handle: Ptr[Byte],
-  val poller: LibUVPoller,
+  val live: LiveHandle,
   val address: Matchable,
   val connections: UnboundedQueue[IO, Either[EmileError.IO, Unit]],
   val acceptor: StreamServer.Acceptor
@@ -59,6 +61,10 @@ type AnyServer = StreamServer[SocketKind]
   * kind-specific steps (client-handle init, address capture, post-accept finish) are carried by the
   * [[Acceptor]] each transport builds at bind. Accepting on a `StreamServer[K]` yields a
   * `Socket[K]`, so the right kind-specific socket operations resolve.
+  *
+  * As with [[Socket$ Socket]], every operation reaches the raw handle through
+  * [[emile.unsafe.LiveHandle LiveHandle]], so an `accept` or `chmod` after the server's resource
+  * has released is a typed [[EmileError.IO.AlreadyClosed]], not a use-after-free.
   */
 object StreamServer:
 
@@ -150,17 +156,19 @@ object StreamServer:
     connections: UnboundedQueue[IO, Either[EmileError.IO, Unit]],
     acceptor: Acceptor
   ): StreamServer[K] =
-    val state = new StreamServerState(handle, poller, address, connections, acceptor)
+    val state = new StreamServerState(LiveHandle(poller, handle), address, connections, acceptor)
     CallbackBridge.store(poller, handle, state)
     state
 
-  /** Release the listener via [[Routing.closeHandle]] alone. `closeHandle` stores its own
-    * completion over the handle's `data` slot and `uv_close`s it in one owner-thread step, which
-    * stops any further `connection_cb`; a separate pre-clear would instead open a window where a
-    * `connection_cb` reads a nulled slot and dereferences it across the C ABI.
+  /** Release the listener through [[emile.unsafe.LiveHandle LiveHandle]]: mark it closed - so a
+    * racing `accept` / `chmod` yields a typed [[EmileError.IO.AlreadyClosed]] rather than touching
+    * a freed handle - then `uv_close` it. The close stores its own completion over the handle's
+    * `data` slot and runs in one owner-thread step, which stops any further `connection_cb`; a
+    * separate pre-clear would instead open a window where a `connection_cb` reads a nulled slot and
+    * dereferences it across the C ABI.
     */
   private[emile] def release(server: AnyServer): IO[Unit] =
-    Routing.closeHandle(server.poller, server.handle)
+    LiveHandle.closeOnOwner(server.live)
 
   /** `uv_connection_cb`, on the server's loop thread: offers a connection signal to the accept
     * queue. libuv on Linux load-sheds accept failures itself and only ever calls this with status
@@ -178,16 +186,31 @@ object StreamServer:
       IO.uncancelable { poll =>
         poll(server.connections.take).flatMap:
           case Left(error) => IO.pure(Left(error))
-          case Right(()) => Routing.onOwner(server.poller)(performAccept(server))
+          case Right(()) => Routing.onOwner(poller(server))(performAccept(server))
       }
     )
 
   private def chmodPipe(server: StreamServerState, mode: IPCMode): EmIO[EmileError.IO, Unit] =
     EffIO.lift(
-      Routing.onOwner(server.poller):
-        val rc = LibUV.uv_pipe_chmod(server.handle, modeFlag(mode))
-        if rc < 0 then Left(IOMapping.fromCode(rc)) else Right(())
+      Routing.onOwner(poller(server)):
+        LiveHandle.tryUse(server.live, closedIOUnit): handle =>
+          val rc = chmodHandle(handle, mode)
+          if rc < 0 then Left(IOMapping.fromCode(rc)) else Right(())
     )
+
+  /** Set a raw pipe handle's socket-file access mode via `uv_pipe_chmod`, returning the libuv rc -
+    * shared by the public [[chmod]] and [[IPC$ IPC]].bind's in-acquire hardening. Call on the owner
+    * thread.
+    */
+  private[emile] def chmodHandle(handle: Ptr[Byte], mode: IPCMode): Int =
+    LibUV.uv_pipe_chmod(handle, modeFlag(mode))
+
+  // The owning loop's poller - stored in the LiveHandle beside the handle, valid until release.
+  private def poller(server: StreamServerState): LibUVPoller = LiveHandle.poller(server.live)
+
+  // Closed-branch results for a LiveHandle guard whose live branch returns an Either.
+  private val closedIOUnit: Either[EmileError.IO, Unit] = Left(EmileError.IO.AlreadyClosed)
+  private def closedAccept[K <: SocketKind]: Either[EmileError.IO, Socket[K]] = Left(EmileError.IO.AlreadyClosed)
 
   // uv_pipe_chmod reuses libuv's UV_READABLE / UV_WRITABLE flag values for the desired access.
   private def modeFlag(mode: IPCMode): Int = mode match
@@ -195,9 +218,9 @@ object StreamServer:
     case IPCMode.Writable => LibUV.UV_WRITABLE
     case IPCMode.ReadWrite => LibUV.UV_READABLE | LibUV.UV_WRITABLE
 
-  // serve accepts one connection at a time in the stream source and runs handlers concurrently
-  // downstream. On shutdown the source ends normally, so parEvalMapUnordered drains its in-flight
-  // handlers to completion rather than cancelling them - the graceful-shutdown contract.
+  // An awaiting supervisor gives serve its shutdown semantics: a normal exit (shutdown fired) joins the
+  // in-flight handlers - the drain-not-cancel contract - while a cancellation cancels them. maxConcurrent
+  // < 1 is a programmer error, hence a defect rather than a typed failure.
   private def serveLoop[K <: SocketKind, E](
     server: StreamServer[K],
     maxConcurrent: Int,
@@ -205,97 +228,105 @@ object StreamServer:
     onError: (EmileError.IO | E) => IO[Unit],
     handler: Socket[K] => EmIO[E, Unit]
   ): EmIO[Nothing, Unit] =
-    // maxConcurrent < 1 is a programmer error, not a runtime condition - a defect, not an isolated error.
     EffIO.liftF(
       IO.raiseWhen(maxConcurrent < 1)(new IllegalArgumentException("serve maxConcurrent must be at least 1")) *>
-        Stream
-          .repeatEval(acceptSocketOrHalt(server, shutdown, onError))
-          .unNoneTerminate
-          .parEvalMapUnordered(maxConcurrent)(socket => handleConnection(socket, handler, onError))
-          .compile
-          .drain
+        Supervisor[IO](await = true).use(supervisor =>
+          Semaphore[IO](maxConcurrent.toLong).flatMap(permits => acceptLoop(server, shutdown, permits, supervisor, onError, handler))
+        )
     )
 
-  // One accepted socket, or None once shutdown fires. An accept error is reported and accepting
-  // continues; the kind's finish step (TCP tuning) runs before the socket is handed on.
-  private def acceptSocketOrHalt[K <: SocketKind, E](
+  private def acceptLoop[K <: SocketKind, E](
     server: StreamServer[K],
     shutdown: IO[Unit],
-    onError: (EmileError.IO | E) => IO[Unit]
-  ): IO[Option[Socket[K]]] =
-    acceptCommit(server, shutdown).flatMap {
-      case Left(None) => IO.pure(None)
-      case Left(Some(error)) => onError(error) *> acceptSocketOrHalt(server, shutdown, onError)
-      case Right(socket) =>
-        server.acceptor.finish(socket).either.flatMap {
-          case Right(()) => IO.pure(Some(socket))
-          case Left(error) => Socket.release(socket) *> onError(error) *> acceptSocketOrHalt(server, shutdown, onError)
-        }
-    }
-
-  // Races shutdown against a connection signal, committing to the accept only once a signal is in hand,
-  // so a shutdown that wins the race never strands an already-produced socket. Left(None) = shutdown,
-  // Left(Some) = accept error, Right = accepted.
-  private def acceptCommit[K <: SocketKind](
-    server: StreamServer[K],
-    shutdown: IO[Unit]
-  ): IO[Either[Option[EmileError.IO], Socket[K]]] =
-    IO.uncancelable { poll =>
-      poll(IO.race(shutdown, server.connections.take)).flatMap {
-        case Left(()) => IO.pure(Left(None))
-        case Right(Left(error)) => IO.pure(Left(Some(error)))
-        case Right(Right(())) =>
-          Routing.onOwner(server.poller)(performAccept(server)).map {
-            case Left(error) => Left(Some(error))
-            case Right(socket) => Right(socket)
-          }
-      }
-    }
-
-  // Runs one connection's handler, isolating a typed failure (the E arm) or a defect (the
-  // EmileError.IO arm) to onError, and releasing the socket afterwards regardless of outcome.
-  private def handleConnection[K <: SocketKind, E](
-    socket: Socket[K],
-    handler: Socket[K] => EmIO[E, Unit],
-    onError: (EmileError.IO | E) => IO[Unit]
+    permits: Semaphore[IO],
+    supervisor: Supervisor[IO],
+    onError: (EmileError.IO | E) => IO[Unit],
+    handler: Socket[K] => EmIO[E, Unit]
   ): IO[Unit] =
-    handler(socket).either.attempt
-      .flatMap {
-        case Right(Right(())) => IO.unit
-        case Right(Left(error)) => onError(error)
-        case Left(defect) => onError(EmileError.IO.Unexpected(defect))
-      }
-      .guarantee(Socket.release(socket))
+    acceptAndFork(server, shutdown, permits, supervisor, onError, handler).flatMap(continue =>
+      if continue then acceptLoop(server, shutdown, permits, supervisor, onError, handler) else IO.unit
+    )
+
+  // The accept and the handler-fork are one uncancelable step, so an accepted socket is always owned by a
+  // supervised fiber that releases it - a cancel can never strand one. Only the two waits are cancelable
+  // and neither holds a socket; a permit taken but not handed to a handler is released here.
+  private def acceptAndFork[K <: SocketKind, E](
+    server: StreamServer[K],
+    shutdown: IO[Unit],
+    permits: Semaphore[IO],
+    supervisor: Supervisor[IO],
+    onError: (EmileError.IO | E) => IO[Unit],
+    handler: Socket[K] => EmIO[E, Unit]
+  ): IO[Boolean] =
+    IO.uncancelable { poll =>
+      poll(IO.race(shutdown, permits.acquire)).flatMap:
+        case Left(()) => IO.pure(false)
+        case Right(()) =>
+          poll(IO.race(shutdown, server.connections.take)).flatMap:
+            case Left(()) => permits.release.as(false)
+            case Right(Left(error)) => permits.release *> onError(error).as(true)
+            case Right(Right(())) =>
+              Routing
+                .onOwner(poller(server))(performAccept(server))
+                .flatMap:
+                  case Left(error) => permits.release *> onError(error).as(true)
+                  case Right(socket) =>
+                    supervisor
+                      .supervise(serveConnection(server, socket, onError, handler).guarantee(Socket.release(socket) *> permits.release))
+                      .as(true)
+    }
+
+  // Routes a finish/handler typed failure (E) or a handler defect (EmileError.IO) to onError, so one
+  // connection never brings the server down. The socket is released by acceptAndFork's guarantee, not here.
+  private def serveConnection[K <: SocketKind, E](
+    server: StreamServer[K],
+    socket: Socket[K],
+    onError: (EmileError.IO | E) => IO[Unit],
+    handler: Socket[K] => EmIO[E, Unit]
+  ): IO[Unit] =
+    server.acceptor
+      .finish(socket)
+      .either
+      .flatMap:
+        case Left(error) => onError(error)
+        case Right(()) =>
+          handler(socket).either.attempt.flatMap:
+            case Right(Right(())) => IO.unit
+            case Right(Left(error)) => onError(error)
+            case Left(defect) => onError(EmileError.IO.Unexpected(defect))
 
   // FFI: client handle calloc with throw-on-OOM, uv_close cleanup of a half-built client.
   // scalafix:off DisableSyntax
 
   private def performAccept[K <: SocketKind](server: StreamServer[K]): Either[EmileError.IO, Socket[K]] =
     val result = performAcceptRaw(server)
-    server.poller.metrics.acceptSettled(result.isRight)
+    poller(server).metrics.acceptSettled(result.isRight)
     result
 
+  // On the owner thread, so the LiveHandle guard makes an accept after the server released a typed
+  // AlreadyClosed rather than a use-after-free.
   private def performAcceptRaw[K <: SocketKind](server: StreamServer[K]): Either[EmileError.IO, Socket[K]] =
-    val acceptor = server.acceptor
-    val client = stdlib.calloc(1.toCSize, LibUV.uv_handle_size(acceptor.handleType))
-    if client == null then throw new OutOfMemoryError("emile: client handle allocation failed")
-    val initRc = acceptor.initClient(server.poller.loop, client)
-    if initRc != 0 then
-      stdlib.free(client)
-      Left(IOMapping.fromCode(initRc))
-    else
-      val acceptRc = LibUV.uv_accept(server.handle, client)
-      if acceptRc != 0 then
-        LibUV.uv_close(client, freeHandleCb)
-        Left(IOMapping.fromCode(acceptRc))
+    LiveHandle.tryUse(server.live, closedAccept[K]): serverHandle =>
+      val acceptor = server.acceptor
+      val client = stdlib.calloc(1.toCSize, LibUV.uv_handle_size(acceptor.handleType))
+      if client == null then throw new OutOfMemoryError("emile: client handle allocation failed")
+      val initRc = acceptor.initClient(poller(server).loop, client)
+      if initRc != 0 then
+        stdlib.free(client)
+        Left(IOMapping.fromCode(initRc))
       else
-        acceptor.captureAddresses(client) match
-          case Left(error) =>
-            LibUV.uv_close(client, freeHandleCb)
-            Left(error)
-          case Right((local, peer)) =>
-            Right(Socket.construct[K](client, server.poller, local, peer))
-    end if
+        val acceptRc = LibUV.uv_accept(serverHandle, client)
+        if acceptRc != 0 then
+          LibUV.uv_close(client, freeHandleCb)
+          Left(IOMapping.fromCode(acceptRc))
+        else
+          acceptor.captureAddresses(client) match
+            case Left(error) =>
+              LibUV.uv_close(client, freeHandleCb)
+              Left(error)
+            case Right((local, peer)) =>
+              Right(Socket.construct[K](client, poller(server), local, peer))
+      end if
   end performAcceptRaw
 
   private val freeHandleCb: LibUV.CloseCB = (handle: Ptr[Byte]) => stdlib.free(handle)
