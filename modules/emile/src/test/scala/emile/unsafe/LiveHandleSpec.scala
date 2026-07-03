@@ -23,11 +23,9 @@ import cats.effect.IO
 import emile.EmileSuite
 import emile.LibUVPollingSystem
 
-/** Covers [[LiveHandle]]: the guard runs the thunk while the handle is live and returns its result;
-  * once [[LiveHandle.closeOnOwner]] has freed the handle the guard short-circuits to the closed
-  * value without dereferencing the freed pointer; and a repeated close is a harmless no-op rather
-  * than a native double free. Exercised against a live loop because reclamation completes only when
-  * libuv's `uv_close` callback fires under a running `uv_run`.
+/** Covers [[LiveHandle]]: the guard runs the thunk while the handle is live, short-circuits to the
+  * closed value once [[LiveHandle.closeOnOwner]] has freed it, and treats a repeated close as a
+  * no-op.
   */
 final class LiveHandleSpec extends EmileSuite:
 

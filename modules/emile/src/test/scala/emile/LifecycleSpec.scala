@@ -26,12 +26,9 @@ import com.comcast.ip4s.Ipv4Address
 import com.comcast.ip4s.Port
 import com.comcast.ip4s.SocketAddress
 
-/** Covers the socket lifecycle under concurrency and after release: [[StreamServer.accepted]] keeps
-  * each socket valid for its handler's `use` scope even when many run at once (the `server` preset
-  * is used, so the finish-socket options are also applied on the accept path), an operation on a
-  * socket whose resource has released fails with [[EmileError.IO.AlreadyClosed]] rather than a
-  * use-after-free, and a second concurrent read fails with [[EmileError.IO.ConflictingOperation]]
-  * rather than corrupting the shared read buffer.
+/** Covers the socket lifecycle under concurrency and after release: concurrent handlers keep their
+  * sockets valid, use after release is a typed [[EmileError.IO.AlreadyClosed]], and a second
+  * concurrent read fails with [[EmileError.IO.ConflictingOperation]].
   */
 final class LifecycleSpec extends EmileSuite:
 

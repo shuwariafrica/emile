@@ -201,8 +201,8 @@ object Socket:
     inline def read(maxBytes: Int): EmIO[EmileError.IO, Option[Chunk[Byte]]] =
       readOnce(socket, maxBytes)
 
-    /** Read exactly `numBytes`, accumulating across libuv reads. Yields a shorter chunk if the peer
-      * half-closes before `numBytes` arrives.
+    /** Read exactly `numBytes`, accumulating across libuv reads. Fails with
+      * [[EmileError.IO.EndOfStream]] if the peer half-closes before `numBytes` arrives.
       */
     @targetName("ext_readN")
     inline def readN(numBytes: Int): EmIO[EmileError.IO, Chunk[Byte]] =
@@ -497,7 +497,7 @@ object Socket:
       else
         readOnceArm(socket, numBytes - acc.size).flatMap:
           case Some(chunk) => go(acc ++ chunk)
-          case None => EffIO.succeed(acc)
+          case None => EffIO.fail(EmileError.IO.EndOfStream)
     go(Chunk.empty[Byte])
 
   private def readPtrOnce[E, A](

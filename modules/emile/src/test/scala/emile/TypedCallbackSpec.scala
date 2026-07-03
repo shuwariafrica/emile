@@ -25,9 +25,7 @@ import com.comcast.ip4s.Ipv4Address
 import com.comcast.ip4s.Port
 import com.comcast.ip4s.SocketAddress
 
-/** A pure application error - it names no emile type, which is the point: [[Socket.onLoop]],
-  * [[Socket.consume]], and [[Socket.readPtr]] carry it on the union error channel.
-  */
+// A pure application error naming no emile type - the union-channel callbacks carry it as the E arm.
 enum AppError extends Exception derives CanEqual:
   case Rejected
   case Malformed(at: Int)

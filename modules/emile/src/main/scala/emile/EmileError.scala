@@ -40,7 +40,7 @@ sealed abstract class EmileError(message: String, cause: Option[Throwable])
   */
 object EmileError:
 
-  /** Failures from `TCP.bind`. */
+  /** Failures from `TCP.bind` and `IPC.bind`. */
   sealed trait Bind extends EmileError
 
   object Bind:
@@ -62,8 +62,8 @@ object EmileError:
         case t => new Unexpected(t)
   end Bind
 
-  /** Failures from `TCP.connect` to an `IpAddress`; through [[HostConnect]] the hostname overload
-    * unifies these with [[DNS]].
+  /** Failures from `TCP.connect` and `IPC.connect`; through [[HostConnect]] the
+    * `TCP.connect(host, port)` overload unifies these with [[DNS]].
     */
   sealed trait Connect extends HostConnect
 
@@ -72,6 +72,9 @@ object EmileError:
     case object NetworkUnreachable extends EmileError("Network unreachable", None) with Connect
     case object HostUnreachable extends EmileError("Host unreachable", None) with Connect
     case object TimedOut extends EmileError("Connection timed out", None) with Connect
+    case object PermissionDenied extends EmileError("Permission denied", None) with Connect
+    case object NotFound extends EmileError("No such file or directory", None) with Connect
+    case object TooManyOpenFiles extends EmileError("Too many open files", None) with Connect
 
     /** A connect argument emile rejected before reaching libuv - for example an
       * [[IPCAddress.Autobind]], which is bind-only.
@@ -100,8 +103,8 @@ object EmileError:
   /** Common parent of [[Connect]] and [[DNS]] - the error type of `TCP.connect(host, port)`. */
   sealed trait HostConnect extends EmileError
 
-  /** Failures from I/O on a live handle - socket reads, writes, and half-closes, file reads, and
-    * fd-readiness.
+  /** Failures from I/O on a live handle - socket reads / writes / half-closes, file open and reads,
+    * filesystem-change watching, and fd-readiness.
     */
   sealed trait IO extends EmileError
 
@@ -109,6 +112,10 @@ object EmileError:
     case object EndOfStream extends EmileError("End of stream", None) with IO
     case object ConnectionReset extends EmileError("Connection reset", None) with IO
     case object BrokenPipe extends EmileError("Broken pipe", None) with IO
+    case object TimedOut extends EmileError("Connection timed out", None) with IO
+    case object NotFound extends EmileError("No such file or directory", None) with IO
+    case object PermissionDenied extends EmileError("Permission denied", None) with IO
+    case object TooManyOpenFiles extends EmileError("Too many open files", None) with IO
     case object AlreadyClosed extends EmileError("Resource already closed", None) with IO
     case object ConflictingOperation
         extends EmileError("A concurrent operation conflicts with one already in flight on this resource", None)
@@ -183,7 +190,7 @@ private[emile] object BindMapping:
   def fromCode(code: Int): EmileError.Bind = code match
     case ErrorCode.UV_EADDRINUSE => EmileError.Bind.AddressInUse
     case ErrorCode.UV_EADDRNOTAVAIL => EmileError.Bind.AddressNotAvailable
-    case ErrorCode.UV_EACCES => EmileError.Bind.PermissionDenied
+    case ErrorCode.UV_EACCES | ErrorCode.UV_EPERM => EmileError.Bind.PermissionDenied
     case other => EmileError.Bind.System(ErrorCode(other))
 
 /** Maps a libuv error code to a typed [[EmileError.Connect]], falling through to
@@ -195,6 +202,9 @@ private[emile] object ConnectMapping:
     case ErrorCode.UV_ENETUNREACH => EmileError.Connect.NetworkUnreachable
     case ErrorCode.UV_EHOSTUNREACH => EmileError.Connect.HostUnreachable
     case ErrorCode.UV_ETIMEDOUT => EmileError.Connect.TimedOut
+    case ErrorCode.UV_EACCES | ErrorCode.UV_EPERM => EmileError.Connect.PermissionDenied
+    case ErrorCode.UV_ENOENT => EmileError.Connect.NotFound
+    case ErrorCode.UV_EMFILE | ErrorCode.UV_ENFILE => EmileError.Connect.TooManyOpenFiles
     case other => EmileError.Connect.System(ErrorCode(other))
 
 /** Maps a libuv error code to a typed [[EmileError.IO]], falling through to
@@ -205,6 +215,10 @@ private[emile] object IOMapping:
     case ErrorCode.UV_EOF => EmileError.IO.EndOfStream
     case ErrorCode.UV_ECONNRESET => EmileError.IO.ConnectionReset
     case ErrorCode.UV_EPIPE => EmileError.IO.BrokenPipe
+    case ErrorCode.UV_ETIMEDOUT => EmileError.IO.TimedOut
+    case ErrorCode.UV_EACCES | ErrorCode.UV_EPERM => EmileError.IO.PermissionDenied
+    case ErrorCode.UV_ENOENT => EmileError.IO.NotFound
+    case ErrorCode.UV_EMFILE | ErrorCode.UV_ENFILE => EmileError.IO.TooManyOpenFiles
     case other => EmileError.IO.System(ErrorCode(other))
 
 /** Maps a libuv resolver code, with the host being resolved, to a typed [[EmileError.DNS]]. The

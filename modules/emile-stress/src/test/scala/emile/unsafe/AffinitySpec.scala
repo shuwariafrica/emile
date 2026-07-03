@@ -19,15 +19,13 @@ import cats.syntax.all.*
 
 import emile.LibUVPollingSystem
 
-/** Guards the load-bearing invariant: a thunk routed through `Routing.onOwner` always runs on the
-  * thread that owns its loop, even under heavy concurrent scheduling. Each operation reports whether
-  * it observed `isOwnerThread`; the pre-fix fast path occasionally migrated a thunk to a stealing
-  * worker, the fixed single-node path never does.
+/** Covers the `Routing.onOwner` affinity invariant: a routed thunk always runs on its loop's owner
+  * thread, even under heavy concurrent scheduling.
   */
 final class AffinitySpec extends StressSuite:
 
   // Large enough that the minimum auto-cede thresholds fire repeatedly and worker local queues stay
-  // busy - the regime in which the pre-fix node could be stolen.
+  // busy, so any off-owner migration would surface.
   private val operations = 20000
 
   test("every Routing.onOwner thunk runs on its owner loop thread under concurrent load") {

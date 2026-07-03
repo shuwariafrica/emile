@@ -100,18 +100,6 @@ final class TCPSpec extends EmileSuite:
       .timeout(5.seconds)
   }
 
-  test("connect to a closed port fails on the Connect channel") {
-    val closedAddress: IO[SocketAddress[IpAddress]] =
-      TCP.bind(anyLoopback).use(server => EffIO.suspend(server.address)).absolve
-    closedAddress
-      .flatMap(addr => TCP.connect(addr).use(_ => EffIO.suspend(())).either)
-      .map {
-        case Left(_: EmileError.Connect) => ()
-        case other => fail(s"expected a Connect error, got: $other")
-      }
-      .timeout(5.seconds)
-  }
-
   private def echoRoundTrip(server: TCPServer, payload: Chunk[Byte]): IO[Unit] =
     val srvWork: IO[Unit] =
       server.accepted

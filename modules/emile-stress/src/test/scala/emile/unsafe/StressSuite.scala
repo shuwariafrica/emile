@@ -25,9 +25,7 @@ import emile.LibUVPollingSystem
 import emile.LoopConfig
 
 /** Base for emile's concurrency-invariant suites: every test runs on a libuv `IORuntime` forced to
-  * the minimum auto-cede thresholds, so scheduler races surface. The aggression is load-bearing - at
-  * the default thresholds the `Routing.onOwner` affinity defect cannot reproduce and AffinitySpec
-  * passes vacuously - so do not relax it.
+  * the minimum auto-cede thresholds, so scheduler races surface.
   */
 abstract class StressSuite extends CatsEffectSuite:
   implicit override lazy val munitIORuntime: IORuntime = StressSuite.AggressiveRuntime
@@ -42,6 +40,8 @@ object StressSuite:
   lazy val AggressiveRuntime: IORuntime =
     val rt = IORuntimeBuilder()
       .setPollingSystem(LibUVPollingSystem(LoopConfig.default))
+      // Load-bearing: at the default thresholds the affinity defect cannot reproduce and AffinitySpec
+      // passes vacuously.
       .setConfig(IORuntimeConfig().copy(cancelationCheckThreshold = 2, autoYieldThreshold = 2))
       .build()
     java.lang.Runtime.getRuntime.addShutdownHook(new Thread(() => rt.shutdown(), "emile-stress-shutdown"))
