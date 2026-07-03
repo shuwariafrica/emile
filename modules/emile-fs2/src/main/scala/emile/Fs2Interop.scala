@@ -75,7 +75,9 @@ object Fs2Interop:
     def peerAddress: GenSocketAddress = socket.peerAddress
 
     def read(maxBytes: Int): IO[Option[Chunk[Byte]]] = socket.read(maxBytes).absolve
-    def readN(numBytes: Int): IO[Chunk[Byte]] = socket.readN(numBytes).absolve
+    // fs2's Socket.readN yields a short chunk at EOF, but emile's readN fails EndOfStream; take from
+    // reads to keep fs2's contract.
+    def readN(numBytes: Int): IO[Chunk[Byte]] = socket.reads.take(numBytes.toLong).compile.to(Chunk).absolve
     def reads: Stream[IO, Byte] = socket.reads.translate(absolveIoK)
 
     def write(bytes: Chunk[Byte]): IO[Unit] = socket.write(bytes).absolve

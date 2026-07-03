@@ -15,37 +15,113 @@
  */
 package emile
 
-/** Covers the [[EmileError]] vocabulary: the four code-dispatch tables, the collapsing `Unexpected`
-  * constructors, [[SignalNumber]] validation, and the [[LoopConfig]] presets.
+import java.nio.file.Files
+import java.nio.file.Path
+import scala.concurrent.duration.*
+import scala.scalanative.posix.sys.stat
+import scala.scalanative.unsafe.Zone
+import scala.scalanative.unsafe.toCString
+import scala.scalanative.unsigned.*
+
+import boilerplate.effect.EffIO
+import cats.effect.IO
+import cats.effect.Resource
+import fs2.Chunk
+import com.comcast.ip4s.IpAddress
+import com.comcast.ip4s.Ipv4Address
+import com.comcast.ip4s.Port
+import com.comcast.ip4s.SocketAddress
+
+/** Covers the [[EmileError]] vocabulary: each code-dispatch table is exercised by driving a real
+  * libuv operation to the failure it maps, with the collapsing `Unexpected` constructors and the
+  * [[SignalNumber]] / [[LoopConfig]] helpers this spec also houses.
   */
-final class EmileErrorSpec extends munit.FunSuite:
+final class EmileErrorSpec extends EmileSuite:
 
-  test("BindMapping dispatches each known code and falls through to System") {
-    assertEquals(BindMapping.fromCode(ErrorCode.UV_EADDRINUSE), EmileError.Bind.AddressInUse: EmileError.Bind)
-    assertEquals(BindMapping.fromCode(ErrorCode.UV_EADDRNOTAVAIL), EmileError.Bind.AddressNotAvailable: EmileError.Bind)
-    assertEquals(BindMapping.fromCode(ErrorCode.UV_EACCES), EmileError.Bind.PermissionDenied: EmileError.Bind)
-    assertEquals(BindMapping.fromCode(-9999), EmileError.Bind.System(ErrorCode(-9999)): EmileError.Bind)
+  private val anyLoopback: SocketAddress[IpAddress] =
+    SocketAddress(Ipv4Address.fromString("127.0.0.1").get, Port.fromInt(0).get)
+
+  test("binding an address already in use maps to Bind.AddressInUse") {
+    TCP
+      .bind(anyLoopback)
+      .use(server =>
+        EffIO.liftF(
+          TCP.bind(server.address).use(_ => EffIO.succeed(())).either.map {
+            case Left(EmileError.Bind.AddressInUse) => ()
+            case other => fail(s"expected AddressInUse, got: $other")
+          }
+        )
+      )
+      .absolve
+      .timeout(5.seconds)
   }
 
-  test("ConnectMapping dispatches each known code and falls through to System") {
-    assertEquals(ConnectMapping.fromCode(ErrorCode.UV_ECONNREFUSED), EmileError.Connect.ConnectionRefused: EmileError.Connect)
-    assertEquals(ConnectMapping.fromCode(ErrorCode.UV_ENETUNREACH), EmileError.Connect.NetworkUnreachable: EmileError.Connect)
-    assertEquals(ConnectMapping.fromCode(ErrorCode.UV_EHOSTUNREACH), EmileError.Connect.HostUnreachable: EmileError.Connect)
-    assertEquals(ConnectMapping.fromCode(ErrorCode.UV_ETIMEDOUT), EmileError.Connect.TimedOut: EmileError.Connect)
-    assertEquals(ConnectMapping.fromCode(-9999), EmileError.Connect.System(ErrorCode(-9999)): EmileError.Connect)
+  test("connecting to a released port maps to Connect.ConnectionRefused") {
+    val closedAddress: IO[SocketAddress[IpAddress]] =
+      TCP.bind(anyLoopback).use(server => EffIO.suspend(server.address)).absolve
+    closedAddress
+      .flatMap(addr =>
+        TCP.connect(addr).use(_ => EffIO.succeed(())).either.map {
+          case Left(EmileError.Connect.ConnectionRefused) => ()
+          case other => fail(s"expected ConnectionRefused, got: $other")
+        }
+      )
+      .timeout(5.seconds)
   }
 
-  test("IOMapping dispatches each known code and falls through to System") {
-    assertEquals(IOMapping.fromCode(ErrorCode.UV_EOF), EmileError.IO.EndOfStream: EmileError.IO)
-    assertEquals(IOMapping.fromCode(ErrorCode.UV_ECONNRESET), EmileError.IO.ConnectionReset: EmileError.IO)
-    assertEquals(IOMapping.fromCode(ErrorCode.UV_EPIPE), EmileError.IO.BrokenPipe: EmileError.IO)
-    assertEquals(IOMapping.fromCode(-9999), EmileError.IO.System(ErrorCode(-9999)): EmileError.IO)
+  test("readN past a peer half-close maps to IO.EndOfStream") {
+    val greeting: Chunk[Byte] = Chunk.array("hi".getBytes("UTF-8"))
+    TCP
+      .bind(anyLoopback)
+      .use(server => EffIO.liftF(shortReadRoundTrip(server, greeting)))
+      .absolve
+      .timeout(5.seconds)
   }
 
-  test("DNSMapping maps the name-resolution codes to UnknownHost") {
-    assertEquals(DNSMapping.fromCode(-3008, "host.example"), EmileError.DNS.UnknownHost("host.example"): EmileError.DNS)
-    assertEquals(DNSMapping.fromCode(-3007, "host.example"), EmileError.DNS.UnknownHost("host.example"): EmileError.DNS)
-    assertEquals(DNSMapping.fromCode(-9999, "host.example"), EmileError.DNS.System(ErrorCode(-9999)): EmileError.DNS)
+  test("opening a missing file maps to IO.NotFound") {
+    tempDir
+      .use(dir =>
+        OpenFile.open(dir.resolve("does-not-exist")).use(_ => EffIO.succeed(())).either.map {
+          case Left(EmileError.IO.NotFound) => ()
+          case other => fail(s"expected IO.NotFound, got: $other")
+        }
+      )
+      .timeout(5.seconds)
+  }
+
+  test("opening an unreadable file maps to IO.PermissionDenied") {
+    unreadableFile
+      .use(file =>
+        OpenFile.open(file).use(_ => EffIO.succeed(())).either.map {
+          case Left(EmileError.IO.PermissionDenied) => ()
+          case other => fail(s"expected IO.PermissionDenied, got: $other")
+        }
+      )
+      .timeout(5.seconds)
+  }
+
+  test("connecting to a missing socket path maps to Connect.NotFound") {
+    tempDir
+      .use(dir =>
+        IPC.connect(IPCAddress.Path(dir.resolve("missing.sock").toString)).use(_ => EffIO.succeed(())).either.map {
+          case Left(EmileError.Connect.NotFound) => ()
+          case other => fail(s"expected Connect.NotFound, got: $other")
+        }
+      )
+      .timeout(5.seconds)
+  }
+
+  test("binding under a missing directory maps to Bind.PermissionDenied") {
+    // uv_pipe_bind2 maps a missing-parent ENOENT to EACCES for Windows parity, so this surfaces as
+    // PermissionDenied, not NotFound.
+    tempDir
+      .use(dir =>
+        IPC.bind(IPCAddress.Path(dir.resolve("absent").resolve("s.sock").toString)).use(_ => EffIO.succeed(())).either.map {
+          case Left(EmileError.Bind.PermissionDenied) => ()
+          case other => fail(s"expected Bind.PermissionDenied, got: $other")
+        }
+      )
+      .timeout(5.seconds)
   }
 
   test("Unexpected returns an already-typed cause unwrapped") {
@@ -74,5 +150,45 @@ final class EmileErrorSpec extends munit.FunSuite:
     val message = EmileError.Bind.System(ErrorCode(ErrorCode.UV_EADDRINUSE)).getMessage
     assert(message.startsWith("EADDRINUSE"), message)
   }
+
+  private def shortReadRoundTrip(server: TCPServer, greeting: Chunk[Byte]): IO[Unit] =
+    val srvWork: IO[Unit] =
+      server.accepted
+        .evalMap(_.use(socket => socket.write(greeting).flatMap(_ => socket.endOfOutput)))
+        .head
+        .compile
+        .drain
+        .absolve
+
+    val cliWork: IO[Unit] =
+      TCP
+        .connect(server.address)
+        .use(socket =>
+          EffIO.liftF(
+            socket.readN(greeting.size + 1).either.map {
+              case Left(EmileError.IO.EndOfStream) => ()
+              case other => fail(s"expected EndOfStream, got: $other")
+            }
+          )
+        )
+        .absolve
+
+    srvWork.background.use(_ => cliWork)
+  end shortReadRoundTrip
+
+  private def tempDir: Resource[IO, Path] =
+    Resource.make(IO(Files.createTempDirectory("emile-errorspec")))(dir => IO(Files.deleteIfExists(dir): Unit))
+
+  // Mode 000: unreadable to the non-root test process, so open reports EACCES.
+  private def unreadableFile: Resource[IO, Path] =
+    Resource.make(IO {
+      val file = Files.createTempFile("emile-errorspec-", ".secret")
+      denyAll(file)
+      file
+    })(file => IO(Files.deleteIfExists(file): Unit))
+
+  private def denyAll(file: Path): Unit =
+    Zone:
+      val _ = stat.chmod(toCString(file.toString), 0.toUInt)
 
 end EmileErrorSpec

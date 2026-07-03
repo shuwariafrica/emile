@@ -47,6 +47,16 @@ final class Fs2InteropSpec extends Fs2EmileSuite:
       .timeout(5.seconds)
   }
 
+  test("readN past a peer half-close returns fs2's short chunk, not a failure") {
+    val greeting: Chunk[Byte] = Chunk.array("hi".getBytes("UTF-8"))
+    TCP
+      .bind(anyLoopback)
+      .widen[EmileError]
+      .use(server => EffIO.liftF(shortReadFs2(server, greeting)))
+      .absolve
+      .timeout(5.seconds)
+  }
+
   test("setOption(SO_KEEPALIVE, true) succeeds via the emile keep-alive setter") {
     TCP
       .bind(anyLoopback)
@@ -160,5 +170,23 @@ final class Fs2InteropSpec extends Fs2EmileSuite:
 
     srvWork.background.use(_ => cliWork)
   end fs2RoundTrip
+
+  private def shortReadFs2(server: TCPServer, greeting: Chunk[Byte]): IO[Unit] =
+    val srvWork: IO[Unit] =
+      server.acceptFs2
+        .evalMap(fs2Sock => fs2Sock.write(greeting).flatMap(_ => fs2Sock.endOfOutput))
+        .head
+        .compile
+        .drain
+
+    val cliWork: IO[Unit] =
+      TCP
+        .connect(server.address)
+        .widen[EmileError]
+        .use(socket => EffIO.liftF(socket.asFs2.readN(greeting.size + 1).map(chunk => assertEquals(chunk.toList, greeting.toList))))
+        .absolve
+
+    srvWork.background.use(_ => cliWork)
+  end shortReadFs2
 
 end Fs2InteropSpec

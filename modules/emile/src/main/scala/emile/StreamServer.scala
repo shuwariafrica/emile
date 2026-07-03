@@ -162,10 +162,9 @@ object StreamServer:
   private[emile] def release(server: AnyServer): IO[Unit] =
     Routing.closeHandle(server.poller, server.handle)
 
-  /** `uv_connection_cb` - run on the server's loop thread. Recovers the server state through the
-    * handle's `data` slot and offers the connection signal to the queue. A negative status is an
-    * exotic libuv connection-acceptance failure (e.g. `EMFILE` after the `uv__emfile_trick`
-    * exhausts) - surface it on the same queue so the next pull sees it.
+  /** `uv_connection_cb`, on the server's loop thread: offers a connection signal to the accept
+    * queue. libuv on Linux load-sheds accept failures itself and only ever calls this with status
+    * 0; the negative-status branch carries the accept errors other platforms deliver here.
     */
   private[emile] val connectionCb: LibUV.ConnectionCB = (handle: Ptr[Byte], status: CInt) =>
     val state = CallbackBridge.load[StreamServerState](handle)

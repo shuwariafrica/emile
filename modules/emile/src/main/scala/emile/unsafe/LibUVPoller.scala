@@ -99,17 +99,12 @@ final private[emile] class LibUVPoller(val config: LoopConfig):
     else p
 
   /** Whether the calling thread is the loop's current driver - the thread that most recently ran
-    * [[poll]] and has not since been retired into a cats-effect blocker.
-    *
-    * `WorkerThread.prepareForBlocking` retires a worker that enters a blocking region: the pool
-    * hands its poller to a replacement thread, renames the retiree with the blocker infix, and the
-    * fibre continues on the retiree. Honouring the retiree's stale claim would run raw libuv calls
-    * concurrently with the replacement's `uv_run` - a native data race on the loop - so the name
-    * check refuses it and the caller falls back to [[submit]].
+    * [[poll]] and has not since been retired into a cats-effect blocker. A retired, blocker-renamed
+    * thread reads as `false`, so the caller falls back to [[submit]] rather than racing the
+    * replacement driver's `uv_run`.
     */
-  // TODO Route this through cats-effect's `PollingContext.ownPoller` and drop the name heuristic
-  // once upstream `WorkerThread.ownsPoller` excludes blocker threads (today it lacks that check and
-  // affirms a retired worker's ownership until its fibre next leaves the thread).
+  // The name check is how a blocker-retired worker's stale ownership is refused: prepareForBlocking
+  // hands the poller to a replacement thread and renames the retiree, but the fibre continues on it.
   def isOwnerThread: Boolean =
     val t = Thread.currentThread()
     (ownerThread eq t) && !t.getName.contains("-blocker-")

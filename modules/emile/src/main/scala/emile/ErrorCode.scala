@@ -72,6 +72,10 @@ object ErrorCode:
   val UV_EADDRINUSE: Int = -errno.EADDRINUSE
   val UV_EADDRNOTAVAIL: Int = -errno.EADDRNOTAVAIL
   val UV_EACCES: Int = -errno.EACCES
+  val UV_EPERM: Int = -errno.EPERM
+  val UV_ENOENT: Int = -errno.ENOENT
+  val UV_EMFILE: Int = -errno.EMFILE
+  val UV_ENFILE: Int = -errno.ENFILE
   val UV_ECONNREFUSED: Int = -errno.ECONNREFUSED
   val UV_ENETUNREACH: Int = -errno.ENETUNREACH
   val UV_EHOSTUNREACH: Int = -errno.EHOSTUNREACH
