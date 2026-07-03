@@ -288,6 +288,21 @@ socket.sendFile(file, 0L, size)    // single uv_fs_sendfile syscall, zero-copy, 
 overlap an in-flight `write` or an `endOfOutput` half-close on the same socket - a concurrent one fails fast with
 `EmileError.IO.ConflictingOperation`. For a complete, backpressured body, prefer `file.reads.through(socket.writes)`.
 
+## Timeouts, retries, and limits
+
+emile ships no timeout, retry, rate-limit, or connection-pool wrappers - each composes from the cats-effect and fs2
+substrate the typed-error channel already rides:
+
+- **Timeout** - `eff.timeout(5.seconds, onTimeout)` bounds a typed effect, raising the error you name; or
+  `eff.absolve.timeout(5.seconds)` on the plain `IO` for a `TimeoutException`. Wrap a connect, a single read, or a whole
+  `serve` handler.
+- **Retry** - `EffIO.retry(TCP.connect(addr).use(run), maxRetries = 3)` re-runs a typed effect on failure.
+- **Connection limit** - `accepted.parEvalMapUnordered(n)(_.use(handler))`, or `serve(n, ...)`, caps concurrent handlers
+  at `n`.
+- **Ephemeral port** - bind to port `0`, then read the kernel-assigned port back from `server.address`.
+- **Rate limiting and batching** - any fs2 `Stream` combinator (`metered`, `groupWithin`, ...) over `accepted` or
+  `reads`.
+
 ## Typed errors as values
 
 emile's effect alias is `EmIO[+E, +A] = boilerplate.effect.EffIO[E, A] = IO[Either[E, A]]` - covariant in both `E` and
@@ -439,6 +454,18 @@ emile's musl support is best-effort, pending upstream Scala Native runtime suppo
 landing ([scala-native#4934](https://github.com/scala-native/scala-native/pull/4934)); treat a musl target as
 experimental until a Scala Native release carrying that work ships. Fully-static (`-static`) musl builds are the most
 affected - prefer dynamic linking on musl today. glibc targets are unaffected.
+
+### File writing goes through fs2
+
+`OpenFile` is read-only - emile has no native file-write capability yet. For writing, creating, or truncating files,
+use `fs2.io.file` (the `emile-fs2` module already brings fs2 in). Native file operations are tracked for a future
+release.
+
+### `connect(host, port)` is serial
+
+`TCP.connect(host, port)` resolves the host and tries the addresses in resolver order, taking the first that connects -
+not Happy Eyeballs / parallel racing. For a different strategy, resolve with `DNS.resolve` and compose the per-address
+`TCP.connect(address)` primitive yourself.
 
 ## Platform Dependencies
 

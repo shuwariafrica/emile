@@ -57,6 +57,16 @@ final class Fs2InteropSpec extends Fs2EmileSuite:
       .timeout(5.seconds)
   }
 
+  test("readN does not over-read - bytes past numBytes stay available for the next read") {
+    val payload: Chunk[Byte] = Chunk.array("HELLOWORLD".getBytes("UTF-8"))
+    TCP
+      .bind(anyLoopback)
+      .widen[EmileError]
+      .use(server => EffIO.liftF(noOverReadFs2(server, payload)))
+      .absolve
+      .timeout(5.seconds)
+  }
+
   test("setOption(SO_KEEPALIVE, true) succeeds via the emile keep-alive setter") {
     TCP
       .bind(anyLoopback)
@@ -188,5 +198,28 @@ final class Fs2InteropSpec extends Fs2EmileSuite:
 
     srvWork.background.use(_ => cliWork)
   end shortReadFs2
+
+  private def noOverReadFs2(server: TCPServer, payload: Chunk[Byte]): IO[Unit] =
+    val srvWork: IO[Unit] =
+      server.acceptFs2.evalMap(fs2Sock => fs2Sock.write(payload)).head.compile.drain
+
+    val cliWork: IO[Unit] =
+      TCP
+        .connect(server.address)
+        .widen[EmileError]
+        .use(socket =>
+          EffIO.liftF {
+            val fs2Sock = socket.asFs2
+            for
+              first <- fs2Sock.readN(4)
+              rest <- fs2Sock.readN(6)
+              _ <- IO(assertEquals((first ++ rest).toList, payload.toList))
+            yield ()
+          }
+        )
+        .absolve
+
+    srvWork.background.use(_ => cliWork)
+  end noOverReadFs2
 
 end Fs2InteropSpec
