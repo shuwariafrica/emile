@@ -98,10 +98,21 @@ final private[emile] class LibUVPoller(val config: LoopConfig):
     if p == null then throw new OutOfMemoryError("emile: libuv handle allocation failed")
     else p
 
-  /** Whether the calling thread is the loop's owner - the thread that first ran [[poll]]. */
+  /** Whether the calling thread is the loop's current driver - the thread that most recently ran
+    * [[poll]] and has not since been retired into a cats-effect blocker.
+    *
+    * `WorkerThread.prepareForBlocking` retires a worker that enters a blocking region: the pool
+    * hands its poller to a replacement thread, renames the retiree with the blocker infix, and the
+    * fibre continues on the retiree. Honouring the retiree's stale claim would run raw libuv calls
+    * concurrently with the replacement's `uv_run` - a native data race on the loop - so the name
+    * check refuses it and the caller falls back to [[submit]].
+    */
+  // TODO Route this through cats-effect's `PollingContext.ownPoller` and drop the name heuristic
+  // once upstream `WorkerThread.ownsPoller` excludes blocker threads (today it lacks that check and
+  // affirms a retired worker's ownership until its fibre next leaves the thread).
   def isOwnerThread: Boolean =
-    val t = ownerThread
-    (t ne null) && (Thread.currentThread() eq t)
+    val t = Thread.currentThread()
+    (ownerThread eq t) && !t.getName.contains("-blocker-")
 
   /** Enqueue a runnable for the loop thread and wake the loop; `false` if the poller has closed. */
   def submit(r: Runnable): Boolean =
@@ -118,7 +129,10 @@ final private[emile] class LibUVPoller(val config: LoopConfig):
     * then return so the worker can resume fibres and re-poll.
     */
   def poll(nanos: Long): PollResult =
-    if ownerThread eq null then ownerThread = Thread.currentThread()
+    // poll's caller is always the loop's current driver, so adopting it here re-heals ownership
+    // after cats-effect hands the poller to a replacement worker - see isOwnerThread.
+    val caller = Thread.currentThread()
+    if ownerThread ne caller then ownerThread = caller
     if closed then return PollResult.Interrupted
     if interrupted then
       interrupted = false
