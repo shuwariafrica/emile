@@ -56,8 +56,8 @@ object Fs2Interop:
     new FunctionK[EffIO.Of[EmileError.IO], IO]:
       def apply[A](fa: EffIO[EmileError.IO, A]): IO[A] = fa.absolve
 
-  // Options the adapter forwards to a TCPSocket setter; getOption still returns None for them, as
-  // emile exposes no corresponding getters.
+  // The options the adapter bridges to a TCPSocket: setOption forwards to a setter, getOption reads
+  // the live value through getsockopt.
   private val SupportedOptionKeys: Set[SocketOption.Key[?]] = Set(
     StandardSocketOptions.TCP_NODELAY,
     StandardSocketOptions.SO_KEEPALIVE
@@ -86,7 +86,14 @@ object Fs2Interop:
 
     val supportedOptions: IO[Set[SocketOption.Key[?]]] = IO.pure(SupportedOptionKeys)
 
-    def getOption[A](key: SocketOption.Key[A]): IO[Option[A]] = IO.pure(None)
+    def getOption[A](key: SocketOption.Key[A]): IO[Option[A]] =
+      (if key eq StandardSocketOptions.TCP_NODELAY then readBoolOption(Socket.readNoDelay(socket))
+       else if key eq StandardSocketOptions.SO_KEEPALIVE then readBoolOption(Socket.readKeepAlive(socket))
+       else IO.pure(None)) .asInstanceOf[IO[Option[A]]] // scalafix:ok DisableSyntax.asInstanceOf
+
+    // getOption yields fs2's boxed java.lang.Boolean; the key match above guarantees the requested A.
+    private def readBoolOption(read: EmIO[EmileError.IO, Boolean]): IO[Option[java.lang.Boolean]] =
+      read.absolve.map(v => Some(java.lang.Boolean.valueOf(v)))
 
     def setOption[A](key: SocketOption.Key[A], value: A): IO[Unit] =
       if key eq StandardSocketOptions.TCP_NODELAY then socket.setNoDelay(value.asInstanceOf[java.lang.Boolean]).absolve // scalafix:ok DisableSyntax

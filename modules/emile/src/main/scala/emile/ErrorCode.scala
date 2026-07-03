@@ -79,6 +79,7 @@ object ErrorCode:
   val UV_ECONNRESET: Int = -errno.ECONNRESET
   val UV_EPIPE: Int = -errno.EPIPE
   val UV_EAGAIN: Int = -errno.EAGAIN
+  val UV_ECANCELED: Int = -errno.ECANCELED
 
   // libuv pseudo-codes with no errno - fixed on every platform, hence literals.
   inline val UV_EOF = -4095

@@ -334,6 +334,17 @@ consumed.either.map:
   case Right(())               => // reached end of input
 ```
 
+To recover just your own error and leave emile's propagating, `catchOnly` narrows the channel back to the residual -
+here `EmileError.IO`, inferred from the union:
+
+```scala
+val recovered: EmIO[EmileError.IO, Unit] =
+  consumed.catchOnly((app: AppError) => EffIO.succeed(()))   // AppError handled; a read failure stays typed
+```
+
+`catchOnly` (recover one arm of a union error), `catchSome` (recover the errors a `PartialFunction` handles, the rest
+pass through), and the other typed-error combinators come from `boilerplate.effect`.
+
 Since `EmileError.IO | EmileError.IO` is just `EmileError.IO`, a callback whose own errors are `EmileError.IO` leaves
 you a plain `EmIO[EmileError.IO, A]` to match - no union to unwrap.
 
@@ -349,6 +360,26 @@ object LoopConfig:
 
 `LoopConfig` is applied per worker. SQPOLL is opt-in only: it needs `CAP_SYS_NICE` on kernels < 5.13 and falls back with
 `ENOSYS` otherwise. Turn it on with `LoopConfig.default.copy(useIoUringSqpoll = true)`.
+
+Separately, DNS resolution and all file I/O run on libuv's **process-wide** worker threadpool - one pool shared by every
+loop, four threads by default. There is no per-loop or runtime knob: the pool is a single process resource, sized once
+from the `UV_THREADPOOL_SIZE` environment variable, read before the first such operation (maximum 1024). Raise it when
+concurrent name resolution or file I/O is the bottleneck.
+
+## Observability
+
+emile's socket and stream I/O surfaces in cats-effect's runtime metrics: each worker's libuv loop reports its operations
+as a `PollerMetrics`, reachable through `runtime.metrics.workStealingThreadPool`.
+
+```scala
+val loops = runtime.metrics.workStealingThreadPool.toList.flatMap(_.workerThreads)
+loops.map(_.poller.totalReadOperationsSucceededCount()).sum   // reads delivered across every loop
+```
+
+Counts are grouped by category - `accept`, `connect`, `read`, `write` - each with submitted / succeeded / errored /
+canceled totals. `read` and `accept` are counted as they complete (a persistent read has no single in-flight
+operation), while `write` and `connect` also carry an outstanding count. Threadpool work (DNS and file I/O) has no
+`PollerMetrics` category and is not counted.
 
 ## fs2 interop - the `emile-fs2` module
 

@@ -38,7 +38,11 @@ final private class OpenFileState(val file: Int, val poller: LibUVPoller)
   */
 opaque type OpenFile = OpenFileState
 
-/** Resource, accessors, and equality for [[OpenFile]]. */
+/** Resource, accessors, and equality for [[OpenFile]]. Every file operation runs on libuv's
+  * process-wide worker threadpool - shared with [[DNS$ DNS]] resolution across every loop, four
+  * threads by default - so set `UV_THREADPOOL_SIZE` in the environment before startup when
+  * concurrent file I/O saturates it.
+  */
 object OpenFile:
 
   /** Opens `path` for reading. The descriptor is closed when the resource releases; while open the

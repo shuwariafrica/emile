@@ -272,6 +272,11 @@ object StreamServer:
   // scalafix:off DisableSyntax
 
   private def performAccept[K <: SocketKind](server: StreamServer[K]): Either[EmileError.IO, Socket[K]] =
+    val result = performAcceptRaw(server)
+    server.poller.metrics.acceptSettled(result.isRight)
+    result
+
+  private def performAcceptRaw[K <: SocketKind](server: StreamServer[K]): Either[EmileError.IO, Socket[K]] =
     val acceptor = server.acceptor
     val client = stdlib.calloc(1.toCSize, LibUV.uv_handle_size(acceptor.handleType))
     if client == null then throw new OutOfMemoryError("emile: client handle allocation failed")
@@ -292,7 +297,7 @@ object StreamServer:
           case Right((local, peer)) =>
             Right(Socket.construct[K](client, server.poller, local, peer))
     end if
-  end performAccept
+  end performAcceptRaw
 
   private val freeHandleCb: LibUV.CloseCB = (handle: Ptr[Byte]) => stdlib.free(handle)
 
