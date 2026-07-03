@@ -151,6 +151,48 @@ final class EmileErrorSpec extends EmileSuite:
     assert(message.startsWith("EADDRINUSE"), message)
   }
 
+  test("read with a non-positive size fails with IO.InvalidArgument") {
+    TCP
+      .bind(anyLoopback)
+      .use(server =>
+        EffIO.liftF(connected(server): socket =>
+          socket.read(0).either.map {
+            case Left(EmileError.IO.InvalidArgument(_)) => ()
+            case other => fail(s"expected InvalidArgument, got: $other")
+          })
+      )
+      .absolve
+      .timeout(5.seconds)
+  }
+
+  test("a write after endOfOutput fails with IO.ConflictingOperation") {
+    val chunk: Chunk[Byte] = Chunk.array("x".getBytes("UTF-8"))
+    TCP
+      .bind(anyLoopback)
+      .use(server =>
+        EffIO.liftF(connected(server): socket =>
+          socket.endOfOutput.absolve.flatMap(_ =>
+            socket.write(chunk).either.map {
+              case Left(EmileError.IO.ConflictingOperation) => ()
+              case other => fail(s"expected ConflictingOperation, got: $other")
+            }
+          ))
+      )
+      .absolve
+      .timeout(5.seconds)
+  }
+
+  test("Unexpected destructures its cause") {
+    EmileError.IO.Unexpected(new RuntimeException("boom")) match
+      case EmileError.IO.Unexpected(cause) => assertEquals(cause.getMessage, "boom")
+      case other => fail(s"expected Unexpected, got: $other")
+  }
+
+  // Connects a client to `server` (the kernel completes the handshake off the listener backlog, so no
+  // server-side accept is needed) and runs `f` on the connected socket.
+  private def connected(server: TCPServer)(f: TCPSocket => IO[Unit]): IO[Unit] =
+    TCP.connect(server.address).use(socket => EffIO.liftF(f(socket))).absolve
+
   private def shortReadRoundTrip(server: TCPServer, greeting: Chunk[Byte]): IO[Unit] =
     val srvWork: IO[Unit] =
       server.accepted

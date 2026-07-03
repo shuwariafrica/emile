@@ -60,6 +60,8 @@ object EmileError:
       def apply(cause: Throwable): Bind = cause match
         case e: Bind => e
         case t => new Unexpected(t)
+
+      def unapply(u: Unexpected): Some[Throwable] = Some(u.cause)
   end Bind
 
   /** Failures from `TCP.connect` and `IPC.connect`; through [[HostConnect]] the
@@ -71,6 +73,7 @@ object EmileError:
     case object ConnectionRefused extends EmileError("Connection refused", None) with Connect
     case object NetworkUnreachable extends EmileError("Network unreachable", None) with Connect
     case object HostUnreachable extends EmileError("Host unreachable", None) with Connect
+    case object AddressNotAvailable extends EmileError("Address not available", None) with Connect
     case object TimedOut extends EmileError("Connection timed out", None) with Connect
     case object PermissionDenied extends EmileError("Permission denied", None) with Connect
     case object NotFound extends EmileError("No such file or directory", None) with Connect
@@ -98,6 +101,8 @@ object EmileError:
       def apply(cause: Throwable): Connect = cause match
         case e: Connect => e
         case t => new Unexpected(t)
+
+      def unapply(u: Unexpected): Some[Throwable] = Some(u.cause)
   end Connect
 
   /** Common parent of [[Connect]] and [[DNS]] - the error type of `TCP.connect(host, port)`. */
@@ -136,6 +141,8 @@ object EmileError:
       def apply(cause: Throwable): IO = cause match
         case e: IO => e
         case t => new Unexpected(t)
+
+      def unapply(u: Unexpected): Some[Throwable] = Some(u.cause)
   end IO
 
   /** Failures from `DNS.resolve` / `DNS.reverse`. */
@@ -156,6 +163,9 @@ object EmileError:
       def apply(cause: Throwable): DNS = cause match
         case e: DNS => e
         case t => new Unexpected(t)
+
+      def unapply(u: Unexpected): Some[Throwable] = Some(u.cause)
+  end DNS
 
   /** Programmer errors and runtime invariants - surfaced through cats-effect's `Throwable` channel
     * by `absolve`, not through the per-operation typed channels.
@@ -180,6 +190,8 @@ object EmileError:
       def apply(cause: Throwable): Runtime = cause match
         case e: Runtime => e
         case t => new Unexpected(t)
+
+      def unapply(u: Unexpected): Some[Throwable] = Some(u.cause)
   end Runtime
 end EmileError
 
@@ -201,6 +213,7 @@ private[emile] object ConnectMapping:
     case ErrorCode.UV_ECONNREFUSED => EmileError.Connect.ConnectionRefused
     case ErrorCode.UV_ENETUNREACH => EmileError.Connect.NetworkUnreachable
     case ErrorCode.UV_EHOSTUNREACH => EmileError.Connect.HostUnreachable
+    case ErrorCode.UV_EADDRNOTAVAIL => EmileError.Connect.AddressNotAvailable
     case ErrorCode.UV_ETIMEDOUT => EmileError.Connect.TimedOut
     case ErrorCode.UV_EACCES | ErrorCode.UV_EPERM => EmileError.Connect.PermissionDenied
     case ErrorCode.UV_ENOENT => EmileError.Connect.NotFound

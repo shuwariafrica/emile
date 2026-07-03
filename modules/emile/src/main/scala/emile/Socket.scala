@@ -312,7 +312,9 @@ object Socket:
   def proxy(a: AnySocket, b: AnySocket): EmIO[EmileError.IO, Unit] =
     val aToB = a.reads.through(b.writes).compile.drain.flatMap(_ => b.endOfOutput)
     val bToA = b.reads.through(a.writes).compile.drain.flatMap(_ => a.endOfOutput)
-    aToB.both(bToA).void
+    // absolve each direction so a typed failure raises: IO.both then cancels the still-running sibling.
+    // A plain typed both never would - a Left is an IO success. Re-type via idempotent Unexpected.
+    EffIO.attempt(IO.both(aToB.absolve, bToA.absolve).void, EmileError.IO.Unexpected(_))
 
   /** Build a [[Socket]] of kind `K` over an already-initialised libuv handle - called once the
     * transport entry (`uv_*_init` + `uv_*_connect` or `uv_accept`) and the address capture have
@@ -445,7 +447,9 @@ object Socket:
     Routing.onOwner(poller(socket))(socket.reading = false)
 
   private def readOnce(socket: StreamSocketState, maxBytes: Int): EmIO[EmileError.IO, Option[Chunk[Byte]]] =
-    withReading(socket)(readOnceArm(socket, maxBytes))
+    // A non-positive size would hand libuv a zero/oversized buffer length (recv past the buffer); reject it.
+    if maxBytes < 1 then EffIO.fail(EmileError.IO.InvalidArgument(s"read size must be at least 1, was $maxBytes"))
+    else withReading(socket)(readOnceArm(socket, maxBytes))
 
   private def readOnceArm(socket: StreamSocketState, maxBytes: Int): EmIO[EmileError.IO, Option[Chunk[Byte]]] =
     EffIO.attempt(
@@ -762,7 +766,7 @@ object Socket:
     cb: Either[Throwable, Unit] => Unit,
     keepAlive: AnyRef
   ): Unit =
-    if socket.sendFileActive then cb(Left(EmileError.IO.ConflictingOperation))
+    if socket.sendFileActive || socket.outputShutdown then cb(Left(EmileError.IO.ConflictingOperation))
     else
       val req = allocWriteReq()
       val bufs = stackalloc[LibUV.Buf]()
@@ -785,7 +789,10 @@ object Socket:
     stdlib.free(req)
     state.socket.pendingWrites -= 1
     state.poller.metrics.writeSettled(status)
-    if status < 0 then state.cb(Left(IOMapping.fromCode(status)))
+    // A local close / closeReset flushes queued writes with UV_ECANCELED; report it as AlreadyClosed
+    // (the local-teardown domain the reader also gets), not a System fault the peer did not cause.
+    if status == ErrorCode.UV_ECANCELED then state.cb(Left(EmileError.IO.AlreadyClosed))
+    else if status < 0 then state.cb(Left(IOMapping.fromCode(status)))
     else state.cb(Right(()))
 
   private def writeChunks(socket: StreamSocketState, chunks: Seq[Chunk[Byte]]): EmIO[EmileError.IO, Unit] =
@@ -814,7 +821,7 @@ object Socket:
     slices: Vector[Chunk.ArraySlice[Byte]],
     cb: Either[Throwable, Unit] => Unit
   ): Unit =
-    if socket.sendFileActive then cb(Left(EmileError.IO.ConflictingOperation))
+    if socket.sendFileActive || socket.outputShutdown then cb(Left(EmileError.IO.ConflictingOperation))
     else
       val nbufs = slices.size
       // uv_write copies the bufs array during the call, so it need not outlive uv_write; the stack
@@ -863,7 +870,7 @@ object Socket:
     EffIO.lift(
       Routing.onOwner(poller(socket)):
         LiveHandle.tryUse[Either[EmileError.IO, Int]](socket.live, Left(EmileError.IO.AlreadyClosed)): handle =>
-          if socket.sendFileActive then Left(EmileError.IO.ConflictingOperation)
+          if socket.sendFileActive || socket.outputShutdown then Left(EmileError.IO.ConflictingOperation)
           else if len <= 0 then Right(0)
           else
             val bufs = stackalloc[LibUV.Buf]()
@@ -920,8 +927,11 @@ object Socket:
         socket.sendFileActive = true
         CallbackBridge.storeReq(poller(socket), req, sendFileDeliver(poller(socket), socket, cb))
         // Cancellation cancels the queued sendfile; its callback fires UV_ECANCELED, which
-        // sendFileDeliver maps to an error and frees the request (clearing sendFileActive).
-        Some(Routing.onOwner(poller(socket))(LibUV.uv_cancel(req): Unit))
+        // sendFileDeliver maps to an error and frees the request (clearing sendFileActive). Guard on
+        // sendFileActive: if the deliver already ran (freed the req, cleared the flag) this is a no-op,
+        // so the finaliser never uv_cancels a freed request (single-flight, so the flag pins this req).
+        Some(Routing.onOwner(poller(socket)):
+          if socket.sendFileActive then LibUV.uv_cancel(req): Unit)
     end if
   end startSendFile
 
