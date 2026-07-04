@@ -106,10 +106,19 @@ private[emile] object SockAddr:
   private def addressOf(ip: Option[IpAddress], port: CUnsignedShort): Option[SocketAddress[IpAddress]] =
     ip.flatMap(a => Port.fromInt(port.toInt).map(SocketAddress(a, _)))
 
+  // Fixed 4/16-byte moves; the index walk avoids the Range that `indices.foreach` allocates per call.
+  // scalafix:off DisableSyntax
   private def copyToPtr(src: Array[Byte], dst: Ptr[Byte]): Unit =
-    src.indices.foreach(i => dst(i) = src(i))
+    var i = 0
+    while i < src.length do
+      dst(i) = src(i)
+      i += 1
 
   private def copyFromPtr(src: Ptr[Byte], dst: Array[Byte]): Unit =
-    dst.indices.foreach(i => dst(i) = src(i))
+    var i = 0
+    while i < dst.length do
+      dst(i) = src(i)
+      i += 1
+  // scalafix:on DisableSyntax
 
 end SockAddr

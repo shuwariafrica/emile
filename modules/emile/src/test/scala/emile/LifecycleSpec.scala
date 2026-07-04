@@ -71,6 +71,22 @@ final class LifecycleSpec extends EmileSuite:
       .timeout(10.seconds)
   }
 
+  test("an accepted socket actually carries the server preset's TCP_NODELAY") {
+    TCP
+      .bind(anyLoopback, TCPOptions.server)
+      .widen[EmileError]
+      .use(server => EffIO.liftF(acceptedNoDelay(server)))
+      .absolve
+      .timeout(10.seconds)
+  }
+
+  // Reads the accepted socket's live TCP_NODELAY through the private getter, so the assertion is on the
+  // option value the kernel holds, not merely that the finish-socket step ran (the earlier T1.2 bound).
+  private def acceptedNoDelay(server: TCPServer): IO[Unit] =
+    val accepted = server.accepted.head.evalMap(_.use(sock => Socket.readNoDelay(sock))).compile.lastOrError.absolve
+    val client = TCP.connect(server.address).widen[EmileError].use(_ => EffIO.liftF(IO.sleep(300.millis))).absolve
+    accepted.both(client).map((noDelay, _) => assert(noDelay, "accepted socket should have TCP_NODELAY set by the server preset"))
+
   private def concurrentEcho(server: TCPServer, payload: Chunk[Byte], n: Int): IO[Unit] =
     val addr = server.address
     val srvWork: IO[Unit] =

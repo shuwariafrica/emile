@@ -37,16 +37,21 @@ private[emile] object Routing:
     * design: cats-effect can auto-cede between nodes and a stealing worker would otherwise run
     * `thunk` - an off-thread libuv call, i.e. a native data race on the loop. A rescheduled node
     * re-runs and re-checks ownership wholesale, so the guarantee survives work-stealing. Off the
-    * owner the node yields `Left` and the call is submitted to the loop thread, with a finaliser
+    * owner the node yields `Foreign` and the call is submitted to the loop thread, with a finaliser
     * that removes the still-queued runnable on cancellation.
     */
   def onOwner[A](poller: LibUVPoller)(thunk: => A): IO[A] =
     IO.delay {
-      if poller.isOwnerThread then Right(runOnOwner(thunk))
-      else Left(())
+      // Fast path on the owner: only NonFatal is captured; a fatal throw propagates to cats-effect's
+      // fatal handler. One ADT object, not a nested Either, on this per-op hot path.
+      if poller.isOwnerThread then
+        try Routed.Ran(thunk)
+        catch case NonFatal(t) => Routed.Threw(t)
+      else Routed.Foreign
     }.flatMap {
-      case Right(outcome) => IO.fromEither(outcome)
-      case Left(()) =>
+      case Routed.Ran(value) => IO.pure(value)
+      case Routed.Threw(error) => IO.raiseError(error)
+      case _ => // Foreign: the thunk was not run; submit it to the loop thread.
         IO.async[A]: cb =>
           IO.delay:
             val runnable: Runnable = () => cb(runOffOwner(thunk))
@@ -56,11 +61,12 @@ private[emile] object Routing:
               None
     }
 
-  // Fast path on the owner: only NonFatal is captured; a fatal throw propagates to cats-effect's
-  // fatal handler.
-  private def runOnOwner[A](thunk: => A): Either[Throwable, A] =
-    try Right(thunk)
-    catch case NonFatal(t) => Left(t)
+  // The ownership-check outcome carried in the single fast-path node: the owner ran the thunk (a value
+  // or a NonFatal throw), or the caller is off-owner and the thunk was not run.
+  private enum Routed[+A]:
+    case Ran(value: A)
+    case Threw(error: Throwable)
+    case Foreign
 
   // Cross-thread path from the submitted runnable: captures every throwable so the IO.async callback
   // always fires - a fatal escaping here is swallowed by the poller's taskDrainCb, hanging the fibre

@@ -124,6 +124,24 @@ final class EmileErrorSpec extends EmileSuite:
       .timeout(5.seconds)
   }
 
+  test("a post-connect option failure keeps its typed IO error, not buried under Connect") {
+    // A sub-second keep-alive is rejected by the post-connect option step (an IO.InvalidArgument) after
+    // the connect itself succeeds; the union channel keeps it typed as IO, not collapsed to Connect.
+    val badOptions = TCPOptions.default.copy(keepAlive = Some(TCPKeepAlive(500.millis, 500.millis, 9)))
+    TCP
+      .bind(anyLoopback)
+      .use(server =>
+        EffIO.liftF(
+          TCP.connect(server.address, badOptions).use(_ => EffIO.succeed(())).either.map {
+            case Left(EmileError.IO.InvalidArgument(_)) => ()
+            case other => fail(s"expected IO.InvalidArgument, got: $other")
+          }
+        )
+      )
+      .absolve
+      .timeout(5.seconds)
+  }
+
   test("Unexpected returns an already-typed cause unwrapped") {
     assertEquals(EmileError.Bind.Unexpected(EmileError.Bind.PermissionDenied), EmileError.Bind.PermissionDenied: EmileError.Bind)
     assertEquals(EmileError.IO.Unexpected(EmileError.IO.ConnectionReset), EmileError.IO.ConnectionReset: EmileError.IO)

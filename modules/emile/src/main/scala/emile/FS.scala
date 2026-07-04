@@ -135,8 +135,15 @@ object FS:
         .flatMap(_ => Stream.repeatEval[EmIO.Of[EmileError.IO], Unit](changesPull(fs)))
   end extension
 
-  // The init-then-start sequence shared by watch and poll; only the libuv backend differs. A start
-  // failure (e.g. a missing path) frees the init'd handle by reusing closeHandle.
+  // The outcome of install, distinguishing the two failure modes by how the handle must be reclaimed: an
+  // init failure has already freed the un-init'd handle (uv_close cannot run on it), a start failure
+  // leaves the handle init'd and anchored, so acquire closes it through closeHandle.
+  private enum Installed:
+    case Ready(fs: FS)
+    case InitFailed(error: EmileError.IO)
+    case StartFailed(error: EmileError.IO)
+
+  // The init-then-start sequence shared by watch and poll; only the libuv backend differs.
   private def acquire(ordinal: Int)(init: (LibUVPoller, Ptr[Byte]) => Int)(
     start: (LibUVPoller, Ptr[Byte]) => Int): EmIO[EmileError.IO, FS] =
     EffIO.lift:
@@ -145,10 +152,11 @@ object FS:
         eventsQueue <- UnboundedQueue[IO, Either[EmileError.IO, FSEvent]]
         changesQueue <- UnboundedQueue[IO, Either[EmileError.IO, Unit]]
         handle <- IO(allocHandle(ordinal))
-        started <- Routing.onOwner(poller)(install(poller, handle, eventsQueue, changesQueue, init, start))
-        result <- started match
-                    case Right(_) => IO.pure(started)
-                    case Left(_) => Routing.closeHandle(poller, handle).as(started)
+        installed <- Routing.onOwner(poller)(install(poller, handle, eventsQueue, changesQueue, init, start))
+        result <- installed match
+                    case Installed.Ready(fs) => IO.pure(Right(fs))
+                    case Installed.InitFailed(error) => IO.pure(Left(error)) // install already freed the un-init'd handle
+                    case Installed.StartFailed(error) => Routing.closeHandle(poller, handle).as(Left(error))
       yield result
 
   private def install(
@@ -158,16 +166,16 @@ object FS:
     changesQueue: UnboundedQueue[IO, Either[EmileError.IO, Unit]],
     init: (LibUVPoller, Ptr[Byte]) => Int,
     start: (LibUVPoller, Ptr[Byte]) => Int
-  ): Either[EmileError.IO, FS] =
+  ): Installed =
     val initRc = init(poller, handle)
     if initRc != 0 then
       stdlib.free(handle)
-      Left(IOMapping.fromCode(initRc))
+      Installed.InitFailed(IOMapping.fromCode(initRc))
     else
       val state = new FSState(handle, poller, eventsQueue, changesQueue)
       CallbackBridge.store(poller, handle, state)
       val startRc = start(poller, handle)
-      if startRc != 0 then Left(IOMapping.fromCode(startRc)) else Right(state)
+      if startRc != 0 then Installed.StartFailed(IOMapping.fromCode(startRc)) else Installed.Ready(state)
   end install
 
   private def release(fs: FS): EmIO[EmileError.IO, Unit] =

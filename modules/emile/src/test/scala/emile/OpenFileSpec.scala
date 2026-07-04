@@ -18,6 +18,11 @@ package emile
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.file.Path
+import scala.concurrent.duration.*
+import scala.scalanative.posix.sys.stat
+import scala.scalanative.unsafe.Zone
+import scala.scalanative.unsafe.toCString
+import scala.scalanative.unsigned.*
 
 import boilerplate.effect.EffIO
 import cats.effect.IO
@@ -75,8 +80,47 @@ final class OpenFileSpec extends EmileSuite:
         .absolve
   }
 
+  test("reads reuses its buffer across chunks and streams a multi-chunk file intact") {
+    // Larger than one 64 KB read buffer, so reads pulls several chunks through the single reused buffer;
+    // a byte pattern means a chunk overwritten before its copy would corrupt the result.
+    val content = Array.tabulate(200000)(i => (i % 251).toByte)
+    tempFile(content).use: path =>
+      OpenFile
+        .open(path)
+        .use(file => file.reads.compile.to(Chunk))
+        .absolve
+        .map(read => assert(read.toArray.sameElements(content), "reused-buffer reads corrupted the stream"))
+  }
+
+  test("an open cancelled while blocked, then completing, closes the orphaned descriptor rather than leaking it") {
+    // A read-only FIFO open blocks until a writer appears, so the timeout cancels it while the worker is
+    // still inside open() - uv_cancel cannot stop it. Opening a writer then lets the open complete into
+    // openDeliver with the cancelled flag set, which closes the now-orphaned fd. Iterated, with the
+    // process descriptor count checked before and after, so a leaked descriptor per iteration would show.
+    fifo.use: path =>
+      val cancelBlockedOpen = OpenFile.open(Path.of(path)).use(_ => EffIO.succeed(())).absolve.timeout(200.millis).attempt.void
+      val unblock = IO.blocking { val w = new FileOutputStream(path); w.close() }
+      (for
+        before <- fdCount
+        _ <- (cancelBlockedOpen *> unblock *> IO.sleep(100.millis)).replicateA_(8)
+        after <- fdCount
+        _ <- IO(assert(after <= before + 2, s"orphaned descriptors leaked: $before -> $after"))
+      yield ()).timeout(30.seconds)
+  }
+
   private def tempFile(content: Array[Byte]): Resource[IO, Path] =
     Resource.make(IO(writeTempFile(content)))(file => IO(file.delete(): Unit)).map(_.toPath)
+
+  private def fifo: Resource[IO, String] =
+    Resource.make(IO.blocking(makeFifo()))(path => IO.blocking(new File(path).delete(): Unit))
+
+  private def makeFifo(): String =
+    val path = s"/tmp/emile-openfile-fifo-${System.nanoTime}"
+    val rc = Zone(stat.mkfifo(toCString(path), 438.toUInt)) // 0666, further masked by umask
+    if rc != 0 then throw new RuntimeException(s"mkfifo failed with $rc") // scalafix:ok DisableSyntax.throw
+    path
+
+  private def fdCount: IO[Int] = IO.blocking(new File("/proc/self/fd").list().length)
 
   private def writeTempFile(content: Array[Byte]): File =
     val file = File.createTempFile("emile-openfile", ".tmp")
