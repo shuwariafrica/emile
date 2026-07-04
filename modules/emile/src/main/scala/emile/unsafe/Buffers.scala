@@ -36,7 +36,7 @@ final private[emile] class ResizableBuffer private (private var buffer: Ptr[Byte
 
   def free(): Unit = stdlib.free(buffer)
 
-object ResizableBuffer:
+private[emile] object ResizableBuffer:
   def apply(initialSize: Int): ResizableBuffer =
     val buffer = stdlib.malloc(initialSize)
     if buffer == null then throw new OutOfMemoryError("emile: native buffer allocation failed")

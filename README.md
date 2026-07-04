@@ -92,7 +92,7 @@ A connected socket offers five read methods across two axes - one-shot vs persis
 | `readN`    | one-shot   | owned `Chunk` | fixed-size header reads |
 | `readPtr`  | one-shot   | zero-copy view | a single zero-copy read |
 | `reads`    | persistent | owned `Chunk` (stream) | TLS handshakes, websockets, line protocols |
-| `consume`  | persistent | zero-copy view | nghttp2-style synchronous chunk consumers |
+| `consume`  | persistent | zero-copy view | feeding a synchronous native parser or codec |
 
 The read modes share one per-socket buffer, so a socket has a single reader: starting a read while another is in
 flight fails fast with `EmileError.IO.ConflictingOperation`. Reading and writing concurrently is fine - they are
@@ -106,9 +106,9 @@ receive-only); `closeReset` (TCP only) aborts the connection with a RST rather t
 queued output. Concurrent writes from different fibres are safe but their relative order is unspecified; batch them
 into one `write(chunks)` or use a single writer where order matters.
 
-`socket.onLoop` runs a synchronous step on the socket's owning loop thread - where thread-unsafe C state such as an
-nghttp2 session must live, since that is the one thread driving the socket's I/O. Keep it short and non-blocking: it
-stalls that worker's I/O until it returns.
+`socket.onLoop` runs a synchronous step on the socket's owning loop thread - where thread-unsafe C state, such as a
+stateful native protocol codec, must live, since that is the one thread driving the socket's I/O. Keep it short and
+non-blocking: it stalls that worker's I/O until it returns.
 
 ### IPC (Unix-domain sockets)
 

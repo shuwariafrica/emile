@@ -70,14 +70,6 @@ object StreamServer:
 
   given [K <: SocketKind] => CanEqual[StreamServer[K], StreamServer[K]] = CanEqual.derived
 
-  inline def chmod(server: IPCServer, mode: IPCMode): EmIO[EmileError.IO, Unit] =
-    server.chmod(mode)
-
-  inline def serve[K <: SocketKind, E <: Throwable](server: StreamServer[K], maxConcurrent: Int, shutdown: IO[Unit])(
-    onError: (EmileError.IO | E) => IO[Unit]
-  )(handler: Socket[K] => EmIO[E, Unit]): EmIO[Nothing, Unit] =
-    server.serve(maxConcurrent, shutdown)(onError)(handler)
-
   /** The per-kind accept strategy a [[StreamServer]] is built with - how to allocate, initialise,
     * and address a client handle, and the post-accept `finish` step (the TCP tuning; nothing for
     * IPC). Built once at bind by the transport entry ([[TCP$ TCP]] / [[IPC$ IPC]]) and carried in

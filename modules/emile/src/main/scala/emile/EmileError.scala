@@ -48,6 +48,9 @@ object EmileError:
     case object AddressNotAvailable extends EmileError("Address not available", None) with Bind
     case object PermissionDenied extends EmileError("Permission denied", None) with Bind
 
+    /** A bind address emile rejected before libuv - an over-long or empty IPC path, or a filesystem
+      * mode requested on an abstract or autobind socket.
+      */
     final case class InvalidAddress(detail: String) extends EmileError(s"Invalid address: $detail", None) with Bind
 
     final case class System(code: ErrorCode) extends EmileError("", None) with Bind:
@@ -121,7 +124,15 @@ object EmileError:
     case object NotFound extends EmileError("No such file or directory", None) with IO
     case object PermissionDenied extends EmileError("Permission denied", None) with IO
     case object TooManyOpenFiles extends EmileError("Too many open files", None) with IO
+
+    /** An operation attempted after the owning `Resource` released the socket, server, file, or
+      * watcher, or after an abortive `closeReset`.
+      */
     case object AlreadyClosed extends EmileError("Resource already closed", None) with IO
+
+    /** Operations on one socket must be serialised: a second read (or second write) started while
+      * one is already in flight fails with this rather than racing the shared per-direction buffer.
+      */
     case object ConflictingOperation
         extends EmileError("A concurrent operation conflicts with one already in flight on this resource", None)
         with IO
@@ -151,6 +162,9 @@ object EmileError:
   object DNS:
     final case class UnknownHost(host: String) extends EmileError(s"Unknown host: $host", None) with DNS
 
+    /** A retryable resolver failure (`EAI_AGAIN`); unlike [[UnknownHost]] the query may succeed if
+      * retried.
+      */
     final case class TemporaryFailure(host: String) extends EmileError(s"Temporary name-resolution failure: $host", None) with DNS
 
     final case class System(code: ErrorCode) extends EmileError("", None) with DNS:

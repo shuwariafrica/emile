@@ -193,7 +193,7 @@ end LibUVPoller
 /** The libuv C callbacks for [[LibUVPoller]]. Each is an object-scope `val` capturing no instance,
   * as a `CFuncPtr` must; the owning poller is recovered from the handle's `data` slot.
   */
-object LibUVPoller:
+private[emile] object LibUVPoller:
 
   private inline def pollerOf(handle: Ptr[Byte]): LibUVPoller =
     Intrinsics.castRawPtrToObject(toRawPtr(LibUV.uv_handle_get_data(handle))).asInstanceOf[LibUVPoller]
