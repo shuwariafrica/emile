@@ -130,36 +130,6 @@ object Socket:
 
   given [K <: SocketKind] => CanEqual[Socket[K], Socket[K]] = CanEqual.derived
 
-  inline def read[K <: SocketKind](socket: Socket[K], maxBytes: Int): EmIO[EmileError.IO, Option[Chunk[Byte]]] =
-    socket.read(maxBytes)
-  inline def readN[K <: SocketKind](socket: Socket[K], numBytes: Int): EmIO[EmileError.IO, Chunk[Byte]] =
-    socket.readN(numBytes)
-  inline def write[K <: SocketKind](socket: Socket[K], chunk: Chunk[Byte]): EmIO[EmileError.IO, Unit] =
-    socket.write(chunk)
-  inline def write[K <: SocketKind](socket: Socket[K], chunks: Seq[Chunk[Byte]]): EmIO[EmileError.IO, Unit] =
-    socket.write(chunks)
-  inline def readPtr[K <: SocketKind, E <: Throwable, A](
-    socket: Socket[K],
-    f: (Ptr[Byte], Int) => EmIO[E, A]
-  ): EmIO[EmileError.IO | E, Option[A]] =
-    socket.readPtr(f)
-  inline def writePtr[K <: SocketKind](socket: Socket[K], buf: Ptr[Byte], len: Int): EmIO[EmileError.IO, Unit] =
-    socket.writePtr(buf, len)
-  inline def tryWritePtr[K <: SocketKind](socket: Socket[K], buf: Ptr[Byte], len: Int): EmIO[EmileError.IO, Int] =
-    socket.tryWritePtr(buf, len)
-  inline def sendFile[K <: SocketKind](socket: Socket[K], file: OpenFile, offset: Long, length: Long): EmIO[EmileError.IO, Long] =
-    socket.sendFile(file, offset, length)
-  inline def consume[K <: SocketKind, E <: Throwable](
-    socket: Socket[K],
-    onChunk: (Ptr[Byte], Int) => Either[E, Unit]): EmIO[EmileError.IO | E, Unit] =
-    socket.consume(onChunk)
-  inline def onLoop[K <: SocketKind, E <: Throwable, A](socket: Socket[K], thunk: => Either[E, A]): EmIO[EmileError.IO | E, A] =
-    socket.onLoop(thunk)
-  inline def setNoDelay(socket: TCPSocket, enabled: Boolean): EmIO[EmileError.IO, Unit] =
-    socket.setNoDelay(enabled)
-  inline def setKeepAlive(socket: TCPSocket, keepAlive: Option[TCPKeepAlive]): EmIO[EmileError.IO, Unit] =
-    socket.setKeepAlive(keepAlive)
-
   extension [K <: SocketKind](socket: Socket[K])
 
     /** The local address this socket is bound to - captured at connect / accept. */
@@ -265,9 +235,10 @@ object Socket:
     inline def consume[E <: Throwable](onChunk: (Ptr[Byte], Int) => Either[E, Unit]): EmIO[EmileError.IO | E, Unit] =
       consumeAll(socket, onChunk)
 
-    /** Runs `thunk` on the socket's owning loop thread, so thread-unsafe C state - an nghttp2
-      * session, say - can be confined to the one thread that also drives this socket's I/O. Like
-      * [[consume]], `thunk` must not block: it holds up that worker's I/O until it returns.
+    /** Runs `thunk` on the socket's owning loop thread, so thread-unsafe C state - a stateful
+      * native protocol codec, say - can be confined to the one thread that also drives this
+      * socket's I/O. Like [[consume]], `thunk` must not block: it holds up that worker's I/O until
+      * it returns.
       */
     @targetName("ext_onLoop")
     inline def onLoop[E <: Throwable, A](thunk: => Either[E, A]): EmIO[EmileError.IO | E, A] =
@@ -277,14 +248,30 @@ object Socket:
 
   extension (socket: TCPSocket)
 
+    /** Enable or disable Nagle's algorithm via `TCP_NODELAY`; disabling coalescing lowers latency
+      * for small writes at the cost of more packets.
+      */
     @targetName("ext_setNoDelay")
     inline def setNoDelay(enabled: Boolean): EmIO[EmileError.IO, Unit] =
-      noDelay(socket, enabled)
+      noDelayOn(socket, enabled)
+
+    /** The live `TCP_NODELAY` state, read through `getsockopt` - the read counterpart to
+      * [[setNoDelay]].
+      */
+    def noDelay: EmIO[EmileError.IO, Boolean] =
+      optionBool(socket, in.IPPROTO_TCP, tcp.TCP_NODELAY)
 
     /** Configure keep-alive probing; `None` disables it. */
     @targetName("ext_setKeepAlive")
     inline def setKeepAlive(keepAlive: Option[TCPKeepAlive]): EmIO[EmileError.IO, Unit] =
       keepAliveOn(socket, keepAlive)
+
+    /** The live keep-alive configuration - `None` when `SO_KEEPALIVE` is off, otherwise the idle,
+      * interval, and probe count read back from the socket. The read counterpart to
+      * [[setKeepAlive]].
+      */
+    def keepAlive: EmIO[EmileError.IO, Option[TCPKeepAlive]] =
+      keepAliveConfig(socket)
 
     /** Abortively close the connection with a TCP RST rather than a graceful FIN, discarding any
       * queued output - for error paths, reverse proxies, and avoiding TIME_WAIT accumulation. The
@@ -953,7 +940,7 @@ object Socket:
 
   private val fsCb: LibUV.FSCB = (req: Ptr[Byte]) => CallbackBridge.loadReq[Ptr[Byte] => Unit](req).apply(req)
 
-  private def noDelay(socket: StreamSocketState, enabled: Boolean): EmIO[EmileError.IO, Unit] =
+  private def noDelayOn(socket: StreamSocketState, enabled: Boolean): EmIO[EmileError.IO, Unit] =
     EffIO.lift(
       Routing.onOwner(poller(socket)):
         LiveHandle.tryUse(socket.live, closedIo): handle =>
@@ -963,6 +950,7 @@ object Socket:
 
   // scala-native's posix layer binds only TCP_NODELAY; these are Linux's TCP keep-alive option
   // values (netinet/tcp.h) for the probe interval and count, set by setsockopt below.
+  private inline val TcpKeepIdle = 4
   private inline val TcpKeepIntvl = 5
   private inline val TcpKeepCnt = 6
 
@@ -1005,27 +993,19 @@ object Socket:
   private def resultOf(rc: Int): Either[EmileError.IO, Unit] =
     if rc < 0 then Left(IOMapping.fromCode(rc)) else Right(())
 
-  /** The live `TCP_NODELAY` state, read through `getsockopt` - the read counterpart to
-    * [[setNoDelay]], surfaced by the fs2 interop layer's `getOption`.
-    */
-  private[emile] def readNoDelay(socket: TCPSocket): EmIO[EmileError.IO, Boolean] =
-    optionBool(socket, in.IPPROTO_TCP, tcp.TCP_NODELAY)
-
-  /** Whether `SO_KEEPALIVE` is enabled, read through `getsockopt`. Reports only the on/off flag,
-    * not the idle/interval/count that [[setKeepAlive]] configures; surfaced by the fs2 interop
-    * layer.
-    */
-  private[emile] def readKeepAlive(socket: TCPSocket): EmIO[EmileError.IO, Boolean] =
-    optionBool(socket, posixSocket.SOL_SOCKET, posixSocket.SO_KEEPALIVE)
-
   private def optionBool(socket: StreamSocketState, level: Int, option: Int): EmIO[EmileError.IO, Boolean] =
     EffIO.lift(Routing.onOwner(poller(socket))(LiveHandle.tryUse(socket.live, closedBoolOption)(readOptionBool(_, level, option))))
 
   private val closedBoolOption: Either[EmileError.IO, Boolean] = Left(EmileError.IO.AlreadyClosed)
 
-  // getsockopt on the socket's fd - TCP_NODELAY and SO_KEEPALIVE are always valid on a stream socket,
-  // so a failure is a genuine typed error. -errno is the libuv-style code IOMapping expects.
-  private def readOptionBool(handle: Ptr[Byte], level: Int, option: Int): Either[EmileError.IO, Boolean] =
+  private def keepAliveConfig(socket: StreamSocketState): EmIO[EmileError.IO, Option[TCPKeepAlive]] =
+    EffIO.lift(Routing.onOwner(poller(socket))(LiveHandle.tryUse(socket.live, closedKeepAlive)(readKeepAliveConfig(_))))
+
+  private val closedKeepAlive: Either[EmileError.IO, Option[TCPKeepAlive]] = Left(EmileError.IO.AlreadyClosed)
+
+  // getsockopt on the socket's fd - the keep-alive and TCP_NODELAY options are always valid on a
+  // connected stream socket, so a failure is a genuine typed error. -errno is the libuv-style code.
+  private def readOptionInt(handle: Ptr[Byte], level: Int, option: Int): Either[EmileError.IO, Int] =
     val fdCell = stackalloc[CInt]()
     val rc1 = LibUV.uv_fileno(handle, fdCell)
     if rc1 < 0 then Left(IOMapping.fromCode(rc1))
@@ -1035,7 +1015,22 @@ object Socket:
       !len = sizeof[CInt].toUInt
       val rc2 = posixSocket.getsockopt(!fdCell, level, option, cell.asInstanceOf[CVoidPtr], len)
       if rc2 < 0 then Left(IOMapping.fromCode(-libcErrno.errno))
-      else Right((!cell) != 0)
+      else Right(!cell)
+
+  private def readOptionBool(handle: Ptr[Byte], level: Int, option: Int): Either[EmileError.IO, Boolean] =
+    readOptionInt(handle, level, option).map(_ != 0)
+
+  // The live keep-alive read: the SO_KEEPALIVE flag, then (when on) the idle/interval/count probes, so
+  // the result mirrors what setKeepAlive wrote.
+  private def readKeepAliveConfig(handle: Ptr[Byte]): Either[EmileError.IO, Option[TCPKeepAlive]] =
+    readOptionBool(handle, posixSocket.SOL_SOCKET, posixSocket.SO_KEEPALIVE).flatMap: on =>
+      if !on then Right(Option.empty[TCPKeepAlive])
+      else
+        for
+          idle <- readOptionInt(handle, in.IPPROTO_TCP, TcpKeepIdle)
+          intvl <- readOptionInt(handle, in.IPPROTO_TCP, TcpKeepIntvl)
+          count <- readOptionInt(handle, in.IPPROTO_TCP, TcpKeepCnt)
+        yield Some(TCPKeepAlive(idle.seconds, intvl.seconds, count))
 
   private def shutdownWrite(socket: StreamSocketState): IO[Unit] =
     IO.async[Unit]: cb =>
@@ -1145,7 +1140,10 @@ object Socket:
   // The thunk's Left is the E arm; a NonFatal throw, or a routing failure when the loop is gone, is the
   // EmileError.IO arm.
   private def runOnLoop[E, A](socket: StreamSocketState, thunk: => Either[E, A]): EmIO[EmileError.IO | E, A] =
-    EffIO.lift(Routing.onOwner(poller(socket))(guardThunk(thunk)).handleError(faultLeft))
+    // Guard the socket's liveness like every other operation: once released, onLoop declines rather than
+    // running loop-thread code against a torn-down socket context.
+    val closed: Either[EmileError.IO | E, A] = Left(EmileError.IO.AlreadyClosed)
+    EffIO.lift(Routing.onOwner(poller(socket))(LiveHandle.tryUse(socket.live, closed)(_ => guardThunk(thunk))).handleError(faultLeft))
 
   private def guardThunk[E, A](thunk: => Either[E, A]): Either[EmileError.IO | E, A] =
     try thunk

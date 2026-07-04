@@ -83,9 +83,63 @@ final class LifecycleSpec extends EmileSuite:
   // Reads the accepted socket's live TCP_NODELAY through the private getter, so the assertion is on the
   // option value the kernel holds, not merely that the finish-socket step ran (the earlier T1.2 bound).
   private def acceptedNoDelay(server: TCPServer): IO[Unit] =
-    val accepted = server.accepted.head.evalMap(_.use(sock => Socket.readNoDelay(sock))).compile.lastOrError.absolve
+    val accepted = server.accepted.head.evalMap(_.use(sock => sock.noDelay)).compile.lastOrError.absolve
     val client = TCP.connect(server.address).widen[EmileError].use(_ => EffIO.liftF(IO.sleep(300.millis))).absolve
     accepted.both(client).map((noDelay, _) => assert(noDelay, "accepted socket should have TCP_NODELAY set by the server preset"))
+
+  test("keepAlive reads back the configuration setKeepAlive wrote, and None once disabled") {
+    TCP
+      .bind(anyLoopback, TCPOptions.server)
+      .widen[EmileError]
+      .use(server => EffIO.liftF(keepAliveRoundTrip(server)))
+      .absolve
+      .timeout(10.seconds)
+  }
+
+  // Round-trips keep-alive on a live connection through the public getter, exercising the SO_KEEPALIVE
+  // plus idle/interval/count getsockopt reconstruction against a real libuv socket.
+  private def keepAliveRoundTrip(server: TCPServer): IO[Unit] =
+    val ka = TCPKeepAlive(30.seconds, 10.seconds, 5)
+    TCP
+      .connect(server.address)
+      .widen[EmileError]
+      .use(socket =>
+        EffIO.liftF(
+          for
+            _ <- socket.setKeepAlive(Some(ka)).absolve
+            on <- socket.keepAlive.absolve
+            _ <- socket.setKeepAlive(None).absolve
+            off <- socket.keepAlive.absolve
+            _ <- IO(assertEquals(on, Some(ka): Option[TCPKeepAlive]))
+            _ <- IO(assertEquals(off, None: Option[TCPKeepAlive]))
+          yield ()
+        )
+      )
+      .absolve
+  end keepAliveRoundTrip
+
+  test("onLoop runs a step on the socket's loop thread, and is AlreadyClosed once released") {
+    TCP
+      .bind(anyLoopback, TCPOptions.server)
+      .widen[EmileError]
+      .use(server => EffIO.liftF(onLoopBehaviour(server)))
+      .absolve
+      .timeout(10.seconds)
+  }
+
+  // Exercises the onLoop escape hatch on a live libuv socket - the thunk runs to its value on the loop
+  // thread - then confirms the LiveHandle guard turns a released socket's onLoop into AlreadyClosed.
+  private def onLoopBehaviour(server: TCPServer): IO[Unit] =
+    for
+      leaked <- TCP
+                  .connect(server.address)
+                  .widen[EmileError]
+                  .use(socket => EffIO.liftF(socket.onLoop(Right(42): Either[EmileError.IO, Int]).absolve.map(v => (socket, v))))
+                  .absolve
+      _ <- IO(assertEquals(leaked._2, 42))
+      closed <- leaked._1.onLoop(Right(1): Either[EmileError.IO, Int]).either
+      _ <- IO(assertEquals(closed, Left(EmileError.IO.AlreadyClosed): Either[EmileError.IO, Int]))
+    yield ()
 
   private def concurrentEcho(server: TCPServer, payload: Chunk[Byte], n: Int): IO[Unit] =
     val addr = server.address

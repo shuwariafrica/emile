@@ -100,8 +100,8 @@ object Fs2Interop:
     val supportedOptions: IO[Set[SocketOption.Key[?]]] = IO.pure(SupportedOptionKeys)
 
     def getOption[A](key: SocketOption.Key[A]): IO[Option[A]] =
-      (if key eq StandardSocketOptions.TCP_NODELAY then readBoolOption(Socket.readNoDelay(socket))
-       else if key eq StandardSocketOptions.SO_KEEPALIVE then readBoolOption(Socket.readKeepAlive(socket))
+      (if key eq StandardSocketOptions.TCP_NODELAY then readBoolOption(socket.noDelay)
+       else if key eq StandardSocketOptions.SO_KEEPALIVE then readBoolOption(socket.keepAlive.map(_.isDefined))
        else IO.pure(None)) .asInstanceOf[IO[Option[A]]] // scalafix:ok DisableSyntax.asInstanceOf
 
     // getOption yields fs2's boxed java.lang.Boolean; the key match above guarantees the requested A.
