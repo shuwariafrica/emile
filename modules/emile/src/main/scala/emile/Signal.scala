@@ -16,11 +16,10 @@
 package emile
 
 import boilerplate.effect.EffIO
+import fs2.Stream
 
-import emile.unsafe.SignalSupervisor
-
-/** Subscriptions to POSIX process signals. A process-singleton supervisor installs a handler for a
-  * signal number the first time it is watched and broadcasts every delivery to every subscriber, so
+/** Subscriptions to POSIX process signals. A per-runtime supervisor installs a handler for a signal
+  * number the first time it is watched and broadcasts every delivery to every subscriber, so
   * concurrent watches of the same signal never race; when the last subscriber for a signal leaves,
   * the handler is removed and the signal's prior disposition restored.
   */
@@ -34,7 +33,7 @@ object Signal:
     * defect on the cats-effect `Throwable` channel, never a value on this stream.
     */
   def watch(signum: SignalNumber): EmStream[Nothing, Unit] =
-    SignalSupervisor.subscribe(signum).translate(EffIO.liftK)
+    Stream.eval(LibUVPollingSystem.currentSupervisor).flatMap(_.subscribe(signum)).translate(EffIO.liftK)
 
   /** A stream emitting on each `SIGINT` or `SIGTERM` - the conventional shutdown signals. */
   val termination: EmStream[Nothing, Unit] =

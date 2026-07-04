@@ -52,32 +52,38 @@ object TCP:
     Resource.make[EffIO.Of[EmileError.Bind], TCPServer](bindAcquire(address, options))(server => EffIO.liftF(StreamServer.release(server)))
 
   /** Connect to `address` with the default [[TCPOptions]]. */
-  def connect(address: SocketAddress[IpAddress]): EmResource[EmileError.Connect, TCPSocket] =
+  def connect(address: SocketAddress[IpAddress]): EmResource[EmileError.Connect | EmileError.IO, TCPSocket] =
     connect(address, TCPOptions.default)
 
   /** Connect to `address` with `options`. The connect is cancelable: a `timeout` or cancellation
-    * aborts the in-flight `uv_tcp_connect` and frees the handle.
+    * aborts the in-flight `uv_tcp_connect` and frees the handle. A connect failure is
+    * [[EmileError.Connect]]; a failure to apply `options` to the established socket is the
+    * [[EmileError.IO]] it is (a socket-option error, not a connect one), not buried under
+    * `Connect`.
     */
-  def connect(address: SocketAddress[IpAddress], options: TCPOptions): EmResource[EmileError.Connect, TCPSocket] =
+  def connect(address: SocketAddress[IpAddress], options: TCPOptions): EmResource[EmileError.Connect | EmileError.IO, TCPSocket] =
     Resource
-      .makeFull[EffIO.Of[EmileError.Connect], TCPSocket](poll => poll(connectRaw(address)))(socket => EffIO.liftF(Socket.release(socket)))
-      .evalTap(applyPostConnect(_, options))
+      .makeFull[EffIO.Of[EmileError.Connect | EmileError.IO], TCPSocket](poll => poll(connectRaw(address)))(socket =>
+        EffIO.liftF(Socket.release(socket))
+      )
+      .evalTap(socket => Socket.applyOptions(socket, options))
 
   /** Connect by hostname with the default [[TCPOptions]]. */
-  def connect(host: Host, port: Port): EmResource[EmileError.HostConnect, TCPSocket] =
+  def connect(host: Host, port: Port): EmResource[EmileError.HostConnect | EmileError.IO, TCPSocket] =
     connect(host, port, TCPOptions.default)
 
   /** Connect by hostname with `options`. Resolves the host through [[DNS]] then attempts the
     * addresses serially in resolver order; the first success wins. Resolver failure surfaces as
-    * [[EmileError.DNS]], connect failure as [[EmileError.Connect]] - both flow through their common
-    * parent [[EmileError.HostConnect]].
+    * [[EmileError.DNS]] and connect failure as [[EmileError.Connect]] - both through their common
+    * parent [[EmileError.HostConnect]] - while a failure to apply `options` is the
+    * [[EmileError.IO]] it is.
     */
-  def connect(host: Host, port: Port, options: TCPOptions): EmResource[EmileError.HostConnect, TCPSocket] =
+  def connect(host: Host, port: Port, options: TCPOptions): EmResource[EmileError.HostConnect | EmileError.IO, TCPSocket] =
     Resource
-      .makeFull[EffIO.Of[EmileError.HostConnect], TCPSocket](poll => poll(hostConnectAcquire(host, port)))(socket =>
+      .makeFull[EffIO.Of[EmileError.HostConnect | EmileError.IO], TCPSocket](poll => poll(hostConnectAcquire(host, port)))(socket =>
         EffIO.liftF(Socket.release(socket))
       )
-      .evalTap(applyPostConnect(_, options))
+      .evalTap(socket => Socket.applyOptions(socket, options))
 
   private def bindAcquire(address: SocketAddress[IpAddress], options: TCPOptions): EmIO[EmileError.Bind, TCPServer] =
     EffIO.attempt(
@@ -257,9 +263,6 @@ object TCP:
   private def toConnectError(rc: Int): EmileError.Connect =
     if rc == 0 then EmileError.Connect.Unexpected(new IllegalStateException("emile: unsupported TCP address family"))
     else ConnectMapping.fromCode(rc)
-
-  private def applyPostConnect(socket: TCPSocket, options: TCPOptions): EmIO[EmileError.Connect, Unit] =
-    Socket.applyOptions(socket, options).mapError(EmileError.Connect.Unexpected(_))
 
   // The finish step applies the per-socket tuning, so accepted sockets get the same options as
   // connected ones.

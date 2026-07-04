@@ -28,7 +28,7 @@ import cats.effect.IO
 final class SignalSpec extends EmileSuite:
 
   test("watch receives a signal raised against the process") {
-    val watch = Signal.watch(SignalNumber(posix.SIGCHLD)).head.compile.drain.absolve
+    val watch = Signal.watch(SignalNumber.SIGCHLD).head.compile.drain.absolve
     val raise = IO.sleep(150.millis) *> IO(clib.raise(posix.SIGCHLD): Unit)
     watch.both(raise).timeout(5.seconds).void
   }

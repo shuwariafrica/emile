@@ -48,6 +48,32 @@ final class ProxySpec extends EmileSuite:
       .timeout(15.seconds)
   }
 
+  test("proxy tears down the surviving direction when the other fails, instead of hanging") {
+    TCP
+      .bind(anyLoopback, TCPOptions.server)
+      .widen[EmileError]
+      .use(server => EffIO.liftF(halfOpenProxy(server)))
+      .absolve
+      .timeout(15.seconds)
+  }
+
+  // Accept two connections: reset the first (so that client's read fails with ConnectionReset) and hold
+  // the second idle (its read would otherwise block forever). proxy must cancel the idle direction when
+  // the other fails - without the sibling-cancel it hangs and the timeout on the caller fires.
+  private def halfOpenProxy(server: TCPServer): IO[Unit] =
+    val serverSide: IO[Unit] =
+      server.accepted.zipWithIndex
+        .evalMap((accept, idx) => accept.use(sock => if idx == 0L then sock.closeReset else EffIO.liftF(IO.never[Unit])))
+        .compile
+        .drain
+        .absolve
+    serverSide.background.use(_ =>
+      (for
+        a <- TCP.connect(server.address).widen[EmileError]
+        b <- TCP.connect(server.address).widen[EmileError]
+      yield (a, b)).use((a, b) => EffIO.liftF(Socket.proxy(a, b).either.void)).absolve
+    )
+
   private def runProxy(backend: TCPServer, front: TCPServer, payload: Chunk[Byte]): IO[Unit] =
     // The backend echoes its input then half-closes; its echo half terminates only once the front's
     // half-close reaches it through the proxy.

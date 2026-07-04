@@ -33,12 +33,16 @@ final class LibUVPollingSystem private (config: LoopConfig) extends PollingSyste
   type Api = LibUVPollingSystem.Access
   type Poller = LibUVPoller
 
+  // One signal supervisor per runtime, reached by workers through the Access handle
+  // (LibUVPollingSystem.currentSupervisor), so a second runtime is never blocked by a first's dead one.
+  private val signals: SignalSupervisor = new SignalSupervisor
+
   def makeApi(ctx: PollingContext[LibUVPoller]): LibUVPollingSystem.Access =
-    new LibUVPollingSystem.Access(ctx)
+    new LibUVPollingSystem.Access(ctx, signals)
 
   def makePoller(): LibUVPoller =
     val p = new LibUVPoller(config)
-    SignalSupervisor.electSupervisor(p)
+    signals.electSupervisor(p)
     p
 
   def closePoller(p: LibUVPoller): Unit = p.close()
@@ -70,9 +74,9 @@ object LibUVPollingSystem:
   def apply(config: LoopConfig): LibUVPollingSystem = new LibUVPollingSystem(config)
 
   /** The worker-facing handle onto a [[emile.unsafe.LibUVPoller LibUVPoller]] - obtains the calling
-    * worker's poller and tests poller ownership.
+    * worker's poller, its runtime's signal supervisor, and tests poller ownership.
     */
-  final class Access private[emile] (ctx: PollingContext[LibUVPoller]):
+  final class Access private[emile] (ctx: PollingContext[LibUVPoller], private[emile] val signals: SignalSupervisor):
 
     private[emile] def withCurrentPoller[A](f: LibUVPoller => IO[A]): IO[A] =
       IO.async_[LibUVPoller](cb => ctx.accessPoller(p => cb(Right(p)))).flatMap(f)
@@ -88,6 +92,17 @@ object LibUVPollingSystem:
     IO.pollers.flatMap: pollers =>
       pollers.collectFirst { case access: Access => access } match
         case Some(access) => access.withCurrentPoller(IO.pure)
+        case None => IO.raiseError(EmileError.Runtime.MissingLibUVPollingSystem)
+
+  /** The calling runtime's [[emile.unsafe.SignalSupervisor SignalSupervisor]] - the entry point
+    * through which `Signal.watch` reaches the per-runtime supervisor. Fails with
+    * `EmileError.Runtime.MissingLibUVPollingSystem` when the runtime carries no libuv polling
+    * system.
+    */
+  private[emile] def currentSupervisor: IO[SignalSupervisor] =
+    IO.pollers.flatMap: pollers =>
+      pollers.collectFirst { case access: Access => access } match
+        case Some(access) => IO.pure(access.signals)
         case None => IO.raiseError(EmileError.Runtime.MissingLibUVPollingSystem)
 
 end LibUVPollingSystem

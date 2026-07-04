@@ -54,8 +54,9 @@ object MyApp extends EmileIOApp.Simple:
 object MyArgsApp extends EmileIOApp:
   def runEff(args: List[String]): EmIO[EmileError, ExitCode] = ???
 
-// Standalone, for non-IOApp code: runs the effect on a fresh libuv runtime, then shuts it down.
-Emile.runEff(myEff)
+// Standalone, for non-IOApp code: runs the effect on a fresh libuv runtime (shut down afterwards) and
+// returns the typed result - Left(EmileError) on failure, Right on success.
+val result: Either[EmileError, Unit] = Emile.runEff(myEff)
 
 // For an embedder owning the process lifecycle, `Emile.runtime` yields the runtime as a
 // `Resource[IO, IORuntime]` (shut down on release).
@@ -200,8 +201,9 @@ Signal.watch(SIGUSR1).evalMap(_ => EffIO.liftF(IO.println("got SIGUSR1"))).compi
 Signal.termination.head.compile.drain // SIGINT|SIGTERM, once
 ```
 
-A single supervisor worker owns one `uv_signal_t` per signum; every subscriber, on any worker, receives every delivery.
-There is no `AlreadyWatched` failure mode and no race on the install.
+Within each runtime, one supervisor worker owns one `uv_signal_t` per signum; every subscriber, on any worker, receives
+every delivery. There is no `AlreadyWatched` failure mode and no race on the install, and a fresh runtime in the same
+process installs its own handlers.
 
 ### AsyncSignal
 
@@ -318,10 +320,14 @@ emile's effect alias is `EmIO[+E, +A] = boilerplate.effect.EffIO[E, A] = IO[Eith
 
 ```scala
 def bind(addr: SocketAddress[IpAddress]): EmResource[EmileError.Bind, TCPServer]
-def connect(addr: SocketAddress[IpAddress]): EmResource[EmileError.Connect, TCPSocket]
-def connect(host: Host, port: Port): EmResource[EmileError.HostConnect, TCPSocket]
+def connect(addr: SocketAddress[IpAddress]): EmResource[EmileError.Connect | EmileError.IO, TCPSocket]
+def connect(host: Host, port: Port): EmResource[EmileError.HostConnect | EmileError.IO, TCPSocket]
 def read(maxBytes: Int): EmIO[EmileError.IO, Option[Chunk[Byte]]]
 ```
+
+A `connect` result is a union: the connect itself fails with `Connect` (or `HostConnect` for the hostname overload),
+while a failure to apply `TCPOptions` to the now-established socket surfaces as the `EmileError.IO` it is - a
+socket-option error, not a connect one.
 
 `EmileError` is a sealed hierarchy with sub-traits per operation family (`Bind`, `Connect`, `DNS`, `IO`, `HostConnect`,
 `Runtime`); each carries named domain cases plus a `System(code: ErrorCode)` for unanticipated libuv codes and an

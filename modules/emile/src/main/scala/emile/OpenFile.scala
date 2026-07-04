@@ -29,6 +29,7 @@ import fs2.Stream
 import emile.unsafe.CallbackBridge
 import emile.unsafe.LibUV
 import emile.unsafe.LibUVPoller
+import emile.unsafe.ResizableBuffer
 import emile.unsafe.Routing
 
 final private class OpenFileState(val file: Int, val poller: LibUVPoller)
@@ -49,7 +50,15 @@ object OpenFile:
     * same file may serve repeated reads.
     */
   def open(path: Path): EmResource[EmileError.IO, OpenFile] =
-    Resource.makeFull[EffIO.Of[EmileError.IO], OpenFile](poll => poll(acquire(path)))(release)
+    Resource.makeFull[EffIO.Of[EmileError.IO], OpenFile] { poll =>
+      EffIO
+        .liftF(LibUVPollingSystem.currentPoller)
+        .flatMap: poller =>
+          // poll wraps only the open wait; the fd -> OpenFileState adoption is uncancelable, so an fd
+          // delivered as cancellation lands is still adopted - and closed by the resource's release - and
+          // never orphaned.
+          poll(EffIO.attempt(openFile(poller, path), EmileError.IO.Unexpected(_))).map(new OpenFileState(_, poller))
+    }(release)
 
   given CanEqual[OpenFile, OpenFile] = CanEqual.derived
 
@@ -69,7 +78,7 @@ object OpenFile:
       * source for `file.reads.through(socket.writes)`.
       */
     def reads: EmStream[EmileError.IO, Byte] =
-      Stream.repeatEval(readOnce(file, DefaultReadSize)).unNoneTerminate.unchunks
+      Stream.resource(readsResource(file)).flatMap(state => Stream.repeatEval(readsRead(state))).unNoneTerminate.unchunks
 
   /** The underlying `uv_file` descriptor - for `uv_fs_sendfile`. */
   private[emile] def descriptor(file: OpenFile): Int = file.file
@@ -77,31 +86,30 @@ object OpenFile:
   /** The owning loop's poller - for `uv_fs_sendfile`'s loop routing. */
   private[emile] def owner(file: OpenFile): LibUVPoller = file.poller
 
-  private def acquire(path: Path): EmIO[EmileError.IO, OpenFile] =
-    EffIO
-      .liftF(LibUVPollingSystem.currentPoller)
-      .flatMap: poller =>
-        EffIO
-          .attempt(openFile(poller, path), EmileError.IO.Unexpected(_))
-          .map(new OpenFileState(_, poller))
-
   private def release(file: OpenFile): EmIO[EmileError.IO, Unit] =
     EffIO.liftF(closeFile(file))
+
+  // Carries the open's callback and a cancelled flag - set by the cancellation finaliser, read by
+  // openDeliver, both on the loop thread, so it needs no synchronisation.
+  final private class OpenRequest(val cb: Either[Throwable, Int] => Unit):
+    var cancelled: Boolean = false // scalafix:ok DisableSyntax.var
 
   // uv_fs_open for reading; the request result delivered by the callback is the uv_file descriptor.
   private def openFile(poller: LibUVPoller, path: Path): IO[Int] =
     IO.async[Int]: cb =>
       Routing.onOwner(poller):
+        val request = new OpenRequest(cb)
         val req = allocRequest()
         val rc = startOpen(poller, req, path)
         if rc < 0 then
           failRequest(req, cb, rc)
           None
         else
-          CallbackBridge.storeReq(poller, req, openDeliver(poller, cb))
-          // Cancellation cancels the queued open; its callback fires UV_ECANCELED, which openDeliver
-          // maps to an error and frees the request.
-          Some(Routing.onOwner(poller)(LibUV.uv_cancel(req): Unit))
+          CallbackBridge.storeReq(poller, req, openDeliver(poller, request))
+          // uv_cancel only stops a still-queued open. If one a worker has begun completes anyway, its
+          // callback fires after this cb is dead, so the flag tells openDeliver to close the delivered
+          // fd rather than orphan it. A queued open cancels to UV_ECANCELED, an error with no fd.
+          Some(Routing.onOwner(poller) { request.cancelled = true; LibUV.uv_cancel(req): Unit })
 
   private def statSize(file: OpenFile): IO[Long] =
     IO.async[Long]: cb =>
@@ -158,13 +166,23 @@ object OpenFile:
     cleanupRequest(req)
     cb(Left(IOMapping.fromCode(rc)))
 
-  private def openDeliver(poller: LibUVPoller, cb: Either[Throwable, Int] => Unit): Ptr[Byte] => Unit =
+  private def openDeliver(poller: LibUVPoller, request: OpenRequest): Ptr[Byte] => Unit =
     req =>
       val result = LibUV.uv_fs_get_result(req).toInt
       CallbackBridge.releaseReq(poller, req)
       cleanupRequest(req)
-      if result < 0 then cb(Left(IOMapping.fromCode(result)))
-      else cb(Right(result))
+      if result < 0 then request.cb(Left(IOMapping.fromCode(result)))
+      // The open completed after a cancel (uv_cancel could not stop it); the cb is dead, so close the
+      // delivered fd rather than leak it.
+      else if request.cancelled then closeOrphan(poller, result)
+      else request.cb(Right(result))
+
+  // Fire-and-forget close of an fd delivered after its acquire was cancelled - no fiber awaits it.
+  private def closeOrphan(poller: LibUVPoller, fd: Int): Unit =
+    val req = allocRequest()
+    if LibUV.uv_fs_close(poller.loop, req, fd, orphanCloseCb) < 0 then cleanupRequest(req)
+
+  private val orphanCloseCb: LibUV.FSCB = (req: Ptr[Byte]) => cleanupRequest(req)
 
   private def statDeliver(poller: LibUVPoller, cb: Either[Throwable, Long] => Unit): Ptr[Byte] => Unit =
     req =>
@@ -189,6 +207,69 @@ object OpenFile:
         else Right(Some(Chunk.fromBytePtr(buf, result)))
       stdlib.free(buf)
       CallbackBridge.releaseReq(poller, req)
+      cleanupRequest(req)
+      cb(outcome)
+
+  // reads reuses one buffer across the stream's sequential chunks instead of a malloc per chunk (the
+  // one-shot read keeps its own buffer - independent reads cannot share one). The read arm, its deliver,
+  // and the release all run on the loop thread, so reading / releasePending are owner-confined; the
+  // deliver runs after the threadpool worker has finished writing, so freeing there - or at release when
+  // no read is in flight - never frees a buffer a worker is still writing. A naive per-stream buffer,
+  // freed unconditionally at release, would race that off-loop write; this deferred free closes it.
+  final private class ReadsState(val file: OpenFileState, val buffer: ResizableBuffer):
+    var reading: Boolean = false // scalafix:ok DisableSyntax.var
+    var releasePending: Boolean = false // scalafix:ok DisableSyntax.var
+
+  private def readsResource(file: OpenFileState): EmResource[EmileError.IO, ReadsState] =
+    Resource.make[EffIO.Of[EmileError.IO], ReadsState](EffIO.liftF(IO(new ReadsState(file, ResizableBuffer(DefaultReadSize)))))(
+      readsRelease
+    )
+
+  private def readsRelease(state: ReadsState): EmIO[EmileError.IO, Unit] =
+    EffIO.liftF(
+      Routing.onOwner(state.file.poller):
+        if state.reading then state.releasePending = true
+        else state.buffer.free()
+    )
+
+  private def readsRead(state: ReadsState): EmIO[EmileError.IO, Option[Chunk[Byte]]] =
+    EffIO.attempt(
+      IO.async[Option[Chunk[Byte]]]: cb =>
+        Routing.onOwner(state.file.poller):
+          val poller = state.file.poller
+          val req = allocRequest()
+          val buf = state.buffer.ensure(DefaultReadSize)
+          val bufs = stackalloc[LibUV.Buf]()
+          bufs._1 = buf
+          bufs._2 = DefaultReadSize.toCSize
+          val rc = LibUV.uv_fs_read(poller.loop, req, state.file.file, bufs, 1.toUInt, -1L, fsCb)
+          if rc < 0 then
+            failRequest(req, cb, rc)
+            None
+          else
+            state.reading = true
+            CallbackBridge.storeReq(poller, req, readsDeliver(state, cb, buf))
+            Some(Routing.onOwner(poller)(LibUV.uv_cancel(req): Unit))
+      ,
+      EmileError.IO.Unexpected(_)
+    )
+
+  private def readsDeliver(
+    state: ReadsState,
+    cb: Either[Throwable, Option[Chunk[Byte]]] => Unit,
+    buf: Ptr[Byte]
+  ): Ptr[Byte] => Unit =
+    req =>
+      val result = LibUV.uv_fs_get_result(req).toInt
+      // Copy into the owned Chunk before any free; the reused buffer is overwritten by the next read.
+      val outcome: Either[EmileError.IO, Option[Chunk[Byte]]] =
+        if result < 0 then Left(IOMapping.fromCode(result))
+        else if result == 0 then Right(None)
+        else Right(Some(Chunk.fromBytePtr(buf, result)))
+      state.reading = false
+      // The release deferred the free to here - the worker has finished, so the buffer is now idle.
+      if state.releasePending then state.buffer.free()
+      CallbackBridge.releaseReq(state.file.poller, req)
       cleanupRequest(req)
       cb(outcome)
 

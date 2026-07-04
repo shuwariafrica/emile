@@ -82,17 +82,20 @@ object Emile:
   private[emile] def unsafeRuntime(config: LoopConfig): IORuntime =
     IORuntimeBuilder().setPollingSystem(LibUVPollingSystem(config)).build()
 
-  /** Run a typed-error effect to its value on a fresh libuv `IORuntime` with the default
-    * [[LoopConfig]], shutting the runtime down afterwards.
+  /** Run a typed-error effect to completion on a fresh libuv `IORuntime` with the default
+    * [[LoopConfig]] and return its typed result, shutting the runtime down afterwards - for driving
+    * emile from a foreign entry point that owns its own control flow. An `EmileError` stays a value
+    * to match on rather than being raised; a `Runtime` defect still raises, as it is a bug, not a
+    * value. To run a whole application whose error should fail the process, extend [[EmileIOApp]].
     */
-  def runEff[A](eff: EmIO[EmileError, A]): A = runEff(LoopConfig.default)(eff)
+  def runEff[A](eff: EmIO[EmileError, A]): Either[EmileError, A] = runEff(LoopConfig.default)(eff)
 
-  /** Run a typed-error effect to its value on a fresh libuv `IORuntime` tuned by `config`, shutting
-    * the runtime down afterwards.
+  /** Run a typed-error effect to completion on a fresh libuv `IORuntime` tuned by `config` and
+    * return its typed result, shutting the runtime down afterwards.
     */
-  def runEff[A](config: LoopConfig)(eff: EmIO[EmileError, A]): A =
+  def runEff[A](config: LoopConfig)(eff: EmIO[EmileError, A]): Either[EmileError, A] =
     val rt = unsafeRuntime(config)
-    try eff.absolve.unsafeRunSync()(using rt)
+    try eff.either.unsafeRunSync()(using rt)
     finally rt.shutdown()
 
 end Emile

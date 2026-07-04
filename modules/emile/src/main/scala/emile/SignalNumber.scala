@@ -45,9 +45,14 @@ object SignalNumber extends OpaqueType[SignalNumber, Int], OpaqueType.Eq[SignalN
 
   val SIGINT: SignalNumber = apply(posix.SIGINT)
   val SIGTERM: SignalNumber = apply(posix.SIGTERM)
+  val SIGQUIT: SignalNumber = apply(posix.SIGQUIT)
   val SIGHUP: SignalNumber = apply(posix.SIGHUP)
   val SIGUSR1: SignalNumber = apply(posix.SIGUSR1)
   val SIGUSR2: SignalNumber = apply(posix.SIGUSR2)
+  val SIGCHLD: SignalNumber = apply(posix.SIGCHLD)
   val SIGPROF: SignalNumber = apply(posix.SIGPROF)
+
+  // scala-native's posix layer does not bind SIGWINCH (it is not in POSIX.1); 28 is its Linux value.
+  val SIGWINCH: SignalNumber = apply(28)
 
 end SignalNumber
