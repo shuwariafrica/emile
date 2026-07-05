@@ -1,20 +1,22 @@
 scalaVersion := "3.8.4"
-organization := "io.github.arashi01"
+organization := "africa.shuwari"
 description := "Scala Native async I/O library backed by libuv."
 startYear := Some(2025)
-homepage := Some(url("https://github.com/arashi01/emile"))
+homepage := Some(url("https://github.com/shuwariafrica/emile"))
 licenses := List("Apache-2.0" -> url("https://www.apache.org/licenses/LICENSE-2.0.txt"))
-versionScheme := Some("semver-spec")
 semanticdbEnabled := true
 scalafmtDetailedError := true
 scalafmtPrintDiff := true
 scmInfo := Some(
   ScmInfo(
-    url("https://github.com/arashi01/emile"),
-    "scm:git:https://github.com/arashi01/emile.git",
-    Some("scm:git:git@github.com:arashi01/emile.git")
+    url("https://github.com/shuwariafrica/emile"),
+    "scm:git:https://github.com/shuwariafrica/emile.git",
+    Some("scm:git:git@github.com:shuwariafrica/emile.git")
   )
 )
+
+// Shuwari org POM defaults: organizationName, organizationHomepage, developers, versionScheme.
+Shuwari.organisationSettings
 
 val emile =
   project
@@ -66,36 +68,11 @@ val `emile-root` =
     .settings(publish / skip := true)
     .aggregate(emile, `emile-fs2`)
 
-def compilerOptions: Seq[String] = Seq(
-  "-language:experimental.macros",
-  "-language:higherKinds",
-  "-language:implicitConversions",
-  "-language:strictEquality",
-  "-Xkind-projector",
-  "-Xmax-inlines:64",
-  "-unchecked",
-  "-deprecation",
-  "-feature",
-  "-explain",
-  "-Wvalue-discard",
-  "-Wnonunit-statement",
-  "-Wunused:implicits",
-  "-Wunused:explicits",
-  "-Wunused:imports",
-  "-Wunused:locals",
-  "-Wunused:params",
-  "-Wunused:privates",
-  "-Yrequire-targetName",
-  "-Ycheck-reentrant",
-  "-Ycheck-mods",
-  "-Xcheck-macros",
-  "-Yexplicit-nulls",
-  "-Werror"
-)
-
 def commonSettings: Seq[Setting[?]] = Seq(
-  Compile / compile / scalacOptions ++= compilerOptions,
-  Test / compile / scalacOptions ++= compilerOptions,
+  // sbt-shuwari's ScalacOptions already carry almost all of emile's mandated set; add the two it omits, and
+  // restore -Yexplicit-nulls / -language:strictEquality in tests (the org default excludes them from Test).
+  Compile / compile / scalacOptions ++= Seq("-Ycheck-mods", "-Xcheck-macros"),
+  Test / compile / scalacOptions ++= Seq("-Ycheck-mods", "-Xcheck-macros", "-Yexplicit-nulls", "-language:strictEquality"),
   Compile / doc / scalacOptions := Nil,
   Test / doc / scalacOptions := Nil,
   testFrameworks += new TestFramework("munit.Framework"),
@@ -127,8 +104,7 @@ def publishSettings: Seq[Setting[?]] = Seq(
   publishTo := {
     if isSnapshot.value then Some("central-snapshots".at("https://central.sonatype.com/repository/maven-snapshots/"))
     else localStaging.value
-  },
-  developers := List(Developer("arashi01", "Ali Rashid", "https://github.com/arashi01", url("https://github.com/arashi01")))
+  }
 )
 
 addCommandAlias("format", "scalafixAll; scalafmtAll; scalafmtSbt; headerCreateAll")

@@ -50,10 +50,10 @@ is best-effort until upstream Scala Native musl support ships (see the [musl cav
 
 ## Style and gates
 
-- **Compiler flags.** `build.sbt`'s `compilerOptions` are binding and apply to both `Compile/compile` and
-  `Test/compile`. `-Werror`, `-Yexplicit-nulls`, `-language:strictEquality`, `-Yrequire-targetName`,
-  `-Ycheck-reentrant`, `-Wvalue-discard`, `-Wnonunit-statement`, and the `-Wunused:*` checks (implicits, explicits,
-  imports, locals, params, privates).
+- **Compiler flags.** emile builds under the org-standard strict `scalacOptions` (`sbt-shuwari`, extended in
+  `build.sbt` with `-Ycheck-mods` / `-Xcheck-macros` and kept fully strict in tests) - binding on both `Compile` and
+  `Test`: `-Werror`, `-Yexplicit-nulls`, `-language:strictEquality`, `-Yrequire-targetName`, `-Ycheck-reentrant`,
+  `-Wvalue-discard`, `-Wnonunit-statement`, and the granular `-Wunused:*` checks.
 - **scalafix.** `.scalafix.conf` enforces `DisableSyntax` (`noVars`, `noWhileLoops`, `noReturns`, `noNulls`, `noThrows`,
   `noAsInstanceOf`, ...). Justified FFI / hot-path deviations carry an in-source suppression
   (`// scalafix:off DisableSyntax` region or `// scalafix:ok` per-line) with a terse cost-justification comment.
