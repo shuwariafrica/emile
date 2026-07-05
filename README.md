@@ -28,14 +28,14 @@ It is **Native-first**: the public API is shaped for the Scala Native representa
 
 | Module      | Artifact                        | Purpose                                                                                                            |
 |-------------|---------------------------------|--------------------------------------------------------------------------------------------------------------------|
-| `emile`     | `io.github.arashi01::emile`     | Core library: bootstrap, TCP, IPC (Unix-domain sockets), DNS, timers, signals, files, filesystem watching, fd-polling. |
-| `emile-fs2` | `io.github.arashi01::emile-fs2` | fs2-networking interop: `TCPSocket.asFs2` / `TCPServer.acceptFs2` adapters onto `fs2.io.net.Socket[IO]`. Optional. |
+| `emile`     | `africa.shuwari::emile`     | Core library: bootstrap, TCP, IPC (Unix-domain sockets), DNS, timers, signals, files, filesystem watching, fd-polling. |
+| `emile-fs2` | `africa.shuwari::emile-fs2` | fs2-networking interop: `TCPSocket.asFs2` / `TCPServer.acceptFs2` adapters onto `fs2.io.net.Socket[IO]`. Optional. |
 
 ```scala
 // build.sbt (sbt 2.x)
 libraryDependencies ++= List(
-  "io.github.arashi01" %% "emile"     % "<version>",
-  "io.github.arashi01" %% "emile-fs2" % "<version>",  // only if you need the fs2 adapter
+  "africa.shuwari" %% "emile"     % "<version>",
+  "africa.shuwari" %% "emile-fs2" % "<version>",  // only if you need the fs2 adapter
 )
 ```
 
@@ -441,7 +441,7 @@ time:
 
 ```scala
 // build.sbt
-libraryDependencies += "io.github.arashi01" %% "emile" % "<version>"
+libraryDependencies += "africa.shuwari" %% "emile" % "<version>"
 
 import scala.scalanative.build.NativeConfig
 nativeConfig := nativeConfig.value.withLinkingOptions(
