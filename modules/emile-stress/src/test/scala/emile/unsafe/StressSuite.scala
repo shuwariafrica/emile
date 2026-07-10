@@ -30,12 +30,15 @@ import emile.LoopConfig
 abstract class StressSuite extends CatsEffectSuite:
   implicit override lazy val munitIORuntime: IORuntime = StressSuite.AggressiveRuntime
 
-/** Holds the shared aggressive-auto-cede libuv [[cats.effect.unsafe.IORuntime IORuntime]] for [[StressSuite]]. */
+/** Holds the shared aggressive-auto-cede libuv [[cats.effect.unsafe.IORuntime IORuntime]] for
+  * [[StressSuite]].
+  */
 @scala.annotation.internal.sharable
 object StressSuite:
 
-  /** Forced to the minimum `cancelationCheckThreshold` / `autoYieldThreshold` (`2`) so auto-cede fires
-    * on nearly every runloop step. Shared across every [[StressSuite]]; a shutdown hook releases it.
+  /** Forced to the minimum `cancelationCheckThreshold` / `autoYieldThreshold` (`2`) so auto-cede
+    * fires on nearly every runloop step. Shared across every [[StressSuite]]; a shutdown hook
+    * releases it.
     */
   lazy val AggressiveRuntime: IORuntime =
     val rt = IORuntimeBuilder()
