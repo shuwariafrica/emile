@@ -299,8 +299,8 @@ object Socket:
   def proxy(a: AnySocket, b: AnySocket): EmIO[EmileError.IO, Unit] =
     val aToB = a.reads.through(b.writes).compile.drain.flatMap(_ => b.endOfOutput)
     val bToA = b.reads.through(a.writes).compile.drain.flatMap(_ => a.endOfOutput)
-    // absolve each direction so a typed failure raises: IO.both then cancels the still-running sibling.
-    // A plain typed both never would - a Left is an IO success. Re-type via idempotent Unexpected.
+    // absolve is the projection onto IO's channel, where a typed failure already rides, so IO.both
+    // cancels the still-running sibling. Unexpected is idempotent, so re-typing wraps only a defect.
     EffIO.attempt(IO.both(aToB.absolve, bToA.absolve).void, EmileError.IO.Unexpected(_))
 
   /** Build a [[Socket]] of kind `K` over an already-initialised libuv handle - called once the
@@ -413,7 +413,8 @@ object Socket:
   private def withReading[A](socket: StreamSocketState)(body: => EmIO[EmileError.IO, A]): EmIO[EmileError.IO, A] =
     acquireReading(socket).bracket(_ => body)(_ => releaseReading(socket))
 
-  private def withReadingApp[E, A](socket: StreamSocketState)(body: => EmIO[EmileError.IO | E, A]): EmIO[EmileError.IO | E, A] =
+  private def withReadingApp[E <: Throwable, A](socket: StreamSocketState)(
+    body: => EmIO[EmileError.IO | E, A]): EmIO[EmileError.IO | E, A] =
     val acquired: EmIO[EmileError.IO | E, Unit] = acquireReading(socket)
     acquired.bracket(_ => body)(_ => releaseReading(socket))
 
@@ -491,14 +492,14 @@ object Socket:
           case None => EffIO.fail(EmileError.IO.EndOfStream)
     go(Chunk.empty[Byte])
 
-  private def readPtrOnce[E, A](
+  private def readPtrOnce[E <: Throwable, A](
     socket: StreamSocketState,
     f: (Ptr[Byte], Int) => EmIO[E, A]
   ): EmIO[EmileError.IO | E, Option[A]] =
     withReadingApp(socket)(readPtrOnceArm(socket, f))
 
   // The read failure widens onto the EmileError.IO arm of the union and f's own failure onto the E arm.
-  private def readPtrOnceArm[E, A](
+  private def readPtrOnceArm[E <: Throwable, A](
     socket: StreamSocketState,
     f: (Ptr[Byte], Int) => EmIO[E, A]
   ): EmIO[EmileError.IO | E, Option[A]] =
@@ -644,13 +645,17 @@ object Socket:
       state.terminated = true
       state.queue.unsafeTryOffer(Left(err)): Unit
 
-  private def consumeAll[E](socket: StreamSocketState, onChunk: (Ptr[Byte], Int) => Either[E, Unit]): EmIO[EmileError.IO | E, Unit] =
+  private def consumeAll[E <: Throwable](
+    socket: StreamSocketState,
+    onChunk: (Ptr[Byte], Int) => Either[E, Unit]): EmIO[EmileError.IO | E, Unit] =
     withReadingApp(socket)(consumeAllArm(socket, onChunk))
 
-  // asyncAttempt carries the deliver's typed Either[union, Unit] outcome (the app's E or a read error) on
-  // its value channel and folds a registration defect onto the EmileError.IO arm - the two could not be
-  // told apart on one Throwable channel once E is erased.
-  private def consumeAllArm[E](socket: StreamSocketState, onChunk: (Ptr[Byte], Int) => Either[E, Unit]): EmIO[EmileError.IO | E, Unit] =
+  // asyncAttempt folds a registration-time throwable only, so it never sees - and so never mis-wraps - the
+  // typed outcome the callback delivers on the same channel. Unexpected is idempotent, so Routing's own
+  // AlreadyClosed passes through and only a true defect is wrapped.
+  private def consumeAllArm[E <: Throwable](
+    socket: StreamSocketState,
+    onChunk: (Ptr[Byte], Int) => Either[E, Unit]): EmIO[EmileError.IO | E, Unit] =
     EffIO.asyncAttempt[EmileError.IO | E, Unit](EmileError.IO.Unexpected(_)) { cb =>
       Routing.onOwner(poller(socket)):
         LiveHandle.tryUse(socket.live, closedConsume(cb)): handle =>
@@ -663,11 +668,11 @@ object Socket:
           else stopReadFinaliser(socket)
     }
 
-  private def closedConsume[E](cb: Either[EmileError.IO | E, Unit] => Unit): Option[IO[Unit]] =
+  private def closedConsume[E <: Throwable](cb: Either[EmileError.IO | E, Unit] => Unit): Option[IO[Unit]] =
     cb(Left(EmileError.IO.AlreadyClosed))
     Option.empty[IO[Unit]]
 
-  private def consumeReceiver[E](
+  private def consumeReceiver[E <: Throwable](
     socket: StreamSocketState,
     cb: Either[EmileError.IO | E, Unit] => Unit,
     onChunk: (Ptr[Byte], Int) => Either[E, Unit]
@@ -1139,19 +1144,19 @@ object Socket:
   // onLoop touches no emile handle, so routing alone is the contract and no liveness guard applies.
   // The thunk's Left is the E arm; a NonFatal throw, or a routing failure when the loop is gone, is the
   // EmileError.IO arm.
-  private def runOnLoop[E, A](socket: StreamSocketState, thunk: => Either[E, A]): EmIO[EmileError.IO | E, A] =
+  private def runOnLoop[E <: Throwable, A](socket: StreamSocketState, thunk: => Either[E, A]): EmIO[EmileError.IO | E, A] =
     // Guard the socket's liveness like every other operation: once released, onLoop declines rather than
     // running loop-thread code against a torn-down socket context.
     val closed: Either[EmileError.IO | E, A] = Left(EmileError.IO.AlreadyClosed)
     EffIO.lift(Routing.onOwner(poller(socket))(LiveHandle.tryUse(socket.live, closed)(_ => guardThunk(thunk))).handleError(faultLeft))
 
-  private def guardThunk[E, A](thunk: => Either[E, A]): Either[EmileError.IO | E, A] =
+  private def guardThunk[E <: Throwable, A](thunk: => Either[E, A]): Either[EmileError.IO | E, A] =
     try thunk
     catch case scala.util.control.NonFatal(t) => Left(EmileError.IO.Unexpected(t))
 
   // Routing.onOwner raises on the Throwable channel only when the loop is gone; keep onLoop's failure
   // surface typed by mapping that onto the EmileError.IO arm.
-  private def faultLeft[E, A](t: Throwable): Either[EmileError.IO | E, A] = t match
+  private def faultLeft[E <: Throwable, A](t: Throwable): Either[EmileError.IO | E, A] = t match
     case e: EmileError.IO => Left(e)
     case other => Left(EmileError.IO.Unexpected(other))
 

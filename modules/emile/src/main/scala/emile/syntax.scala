@@ -20,11 +20,12 @@ import cats.effect.kernel.Resource
 import fs2.Pipe
 import fs2.Stream
 
-/** Typed-error effect for the libuv runtime - a `cats.effect.IO` carrying an `Either[E, A]`,
-  * covariant in both the error `E` and the value `A`, so a narrower error widens implicitly at
-  * every call site.
+/** Typed-error effect for the libuv runtime - a `cats.effect.IO[A]` whose error `E` is a phantom. A
+  * failure rides `IO`'s own `Throwable` channel, so the success path allocates nothing, `absolve`
+  * is an identity, and the cats-effect and fs2 error combinators see a typed failure as they see a
+  * defect. Its higher-kinded partial application is in [[EmIO$ EmIO]].
   */
-type EmIO[+E, +A] = EffIO[E, A]
+type EmIO[+E <: Throwable, +A] = EffIO[E, A]
 
 /** Companion namespace for the [[EmIO]] effect alias; holds its higher-kinded partial application
   * [[EmIO.Of]].
@@ -34,39 +35,41 @@ object EmIO:
   /** The effect constructor with its error fixed to `E`, `[A] =>> EmIO[E, A]`, for the
     * type-constructor positions of `Stream`, `Resource`, and `Pipe`. Mirrors `EffIO.Of`.
     */
-  type Of[E] = EffIO.Of[E]
+  type Of[E <: Throwable] = EffIO.Of[E]
 
 /** An fs2 `Stream` scoped over the [[EmIO]] effect; covariant in the error `E`. */
-type EmStream[+E, +A] = Stream[EffIO.Of[E], A]
+type EmStream[+E <: Throwable, +A] = Stream[EffIO.Of[E], A]
 
 /** A cats-effect `Resource` scoped over the [[EmIO]] effect. Invariant in `E` - `Resource` is
   * invariant in its effect type - so the error channel is widened through the `widen` extension
   * rather than implicitly.
   */
-type EmResource[E, A] = Resource[EffIO.Of[E], A]
+type EmResource[E <: Throwable, A] = Resource[EffIO.Of[E], A]
 
 /** An fs2 `Pipe` scoped over the [[EmIO]] effect. Invariant in `E` and so not error-widenable; it
   * is applied with `through` to a stream of its own error type.
   */
-type EmPipe[E, -I, +O] = Pipe[EffIO.Of[E], I, O]
+type EmPipe[E <: Throwable, -I, +O] = Pipe[EffIO.Of[E], I, O]
 
 /** Widens an [[EmResource]]'s error channel to a supertype - the explicit counterpart to the
   * implicit widening that the covariant [[EmIO]] and [[EmStream]] get for free.
   */
-extension [E, A](resource: EmResource[E, A]) def widen[E2 >: E]: EmResource[E2, A] = resource.mapK(EffIO.widenK[E, E2])
+extension [E <: Throwable, A](resource: EmResource[E, A])
+  def widen[E2 >: E <: Throwable]: EmResource[E2, A] = resource.mapK(EffIO.widenK[E, E2])
 
 /** Widens an [[EmStream]]'s error channel to a supertype without a cast. [[EmStream]] also widens
   * implicitly through covariance; this is the explicit, inference-friendly spelling, paralleling
   * the `widen` on [[EmResource]].
   */
-extension [E, A](stream: EmStream[E, A]) def widenS[E2 >: E]: EmStream[E2, A] = stream.translate(EffIO.widenK[E, E2])
+extension [E <: Throwable, A](stream: EmStream[E, A])
+  def widenS[E2 >: E <: Throwable]: EmStream[E2, A] = stream.translate(EffIO.widenK[E, E2])
 
 /** Widens an [[EmPipe]]'s error channel to a supertype. `Pipe` is invariant in its effect (the
   * effect occupies a function-input position), so it cannot widen structurally as [[EmIO]] and
   * [[EmStream]] do; widening the resulting stream with `widenS` is the cast-free alternative.
   */
-extension [E, I, O](pipe: EmPipe[E, I, O])
-  def widen[E2 >: E]: EmPipe[E2, I, O] =
-    // EmIO's error is a phantom (erased at runtime), so reinterpreting the invariant Pipe at a wider
-    // error is a runtime identity, not a structural transform, exactly as EffIO.assumeError does.
+extension [E <: Throwable, I, O](pipe: EmPipe[E, I, O])
+  def widen[E2 >: E <: Throwable]: EmPipe[E2, I, O] =
+    // E is absent from the representation, so widening the invariant Pipe is a runtime identity rather
+    // than a structural transform.
     pipe.asInstanceOf[EmPipe[E2, I, O]] // scalafix:ok DisableSyntax.asInstanceOf
