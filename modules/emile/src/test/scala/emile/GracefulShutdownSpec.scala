@@ -52,7 +52,7 @@ final class GracefulShutdownSpec extends EmileSuite:
       // The handler signals it is in flight, does slow work, then records completion - which only runs
       // if the drain lets it finish rather than cancelling it mid-sleep.
       handler = (_: TCPSocket) => EffIO.liftF(started.complete(()).attempt.void *> IO.sleep(600.millis) *> completed.set(true))
-      serveFib <- server.serve(4, shutdown.get)(_ => IO.unit)(handler).absolve.start
+      serveFib <- server.serve(4, shutdown.get)(handler)(_ => IO.unit).absolve.start
       // A client connects and holds the socket open so the handler stays in flight until shutdown.
       clientFib <- clientHold(server).start
       _ <- started.get

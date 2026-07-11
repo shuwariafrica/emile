@@ -16,11 +16,13 @@
 package emile
 
 import scala.annotation.targetName
+import scala.reflect.TypeTest
 import scala.scalanative.libc.stdlib
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
 import boilerplate.effect.EffIO
+import boilerplate.effect.given
 import cats.effect.IO
 import cats.effect.Resource
 import cats.effect.std.Semaphore
@@ -121,10 +123,21 @@ object StreamServer:
       * [[accepted]] directly for a server that stops on the first failure.
       */
     @targetName("ext_serve")
-    def serve[E <: Throwable](maxConcurrent: Int, shutdown: IO[Unit])(onError: (EmileError.IO | E) => IO[Unit])(
-      handler: Socket[K] => EmIO[E, Unit]
-    ): EmIO[Nothing, Unit] =
+    def serve[E <: Throwable](maxConcurrent: Int, shutdown: IO[Unit])(handler: Socket[K] => EmIO[E, Unit])(
+      onError: (EmileError.IO | E) => IO[Unit]
+    )(using TypeTest[Throwable, E]): EmIO[Nothing, Unit] =
       serveLoop(server, maxConcurrent, shutdown, onError, handler)
+
+    /** As the general [[serve]], for a handler that publishes no typed error of its own: everything
+      * reaching `onError` is then emile's, a defect arriving as [[EmileError.IO.Unexpected]].
+      */
+    @targetName("ext_serveInfallible")
+    def serve(maxConcurrent: Int, shutdown: IO[Unit])(handler: Socket[K] => EmIO[Nothing, Unit])(
+      onError: EmileError.IO => IO[Unit]
+    ): EmIO[Nothing, Unit] =
+      // Pinning E = Nothing on a more specific handler keeps the solver from widening it to Throwable,
+      // whose type test is the identity - every defect would then reach onError raw, unwrapped.
+      serveLoop[K, Nothing](server, maxConcurrent, shutdown, onError, handler)
 
   end extension
 
@@ -213,13 +226,13 @@ object StreamServer:
   // An awaiting supervisor gives serve its shutdown semantics: a normal exit (shutdown fired) joins the
   // in-flight handlers - the drain-not-cancel contract - while a cancellation cancels them. maxConcurrent
   // < 1 is a programmer error, hence a defect rather than a typed failure.
-  private def serveLoop[K <: SocketKind, E](
+  private def serveLoop[K <: SocketKind, E <: Throwable](
     server: StreamServer[K],
     maxConcurrent: Int,
     shutdown: IO[Unit],
     onError: (EmileError.IO | E) => IO[Unit],
     handler: Socket[K] => EmIO[E, Unit]
-  ): EmIO[Nothing, Unit] =
+  )(using TypeTest[Throwable, E]): EmIO[Nothing, Unit] =
     EffIO.liftF(
       IO.raiseWhen(maxConcurrent < 1)(new IllegalArgumentException("serve maxConcurrent must be at least 1")) *>
         Supervisor[IO](await = true).use(supervisor =>
@@ -227,14 +240,14 @@ object StreamServer:
         )
     )
 
-  private def acceptLoop[K <: SocketKind, E](
+  private def acceptLoop[K <: SocketKind, E <: Throwable](
     server: StreamServer[K],
     shutdown: IO[Unit],
     permits: Semaphore[IO],
     supervisor: Supervisor[IO],
     onError: (EmileError.IO | E) => IO[Unit],
     handler: Socket[K] => EmIO[E, Unit]
-  ): IO[Unit] =
+  )(using TypeTest[Throwable, E]): IO[Unit] =
     acceptAndFork(server, shutdown, permits, supervisor, onError, handler).flatMap(continue =>
       if continue then acceptLoop(server, shutdown, permits, supervisor, onError, handler) else IO.unit
     )
@@ -242,14 +255,14 @@ object StreamServer:
   // The accept and the handler-fork are one uncancelable step, so an accepted socket is always owned by a
   // supervised fiber that releases it - a cancel can never strand one. Only the two waits are cancelable
   // and neither holds a socket; a permit taken but not handed to a handler is released here.
-  private def acceptAndFork[K <: SocketKind, E](
+  private def acceptAndFork[K <: SocketKind, E <: Throwable](
     server: StreamServer[K],
     shutdown: IO[Unit],
     permits: Semaphore[IO],
     supervisor: Supervisor[IO],
     onError: (EmileError.IO | E) => IO[Unit],
     handler: Socket[K] => EmIO[E, Unit]
-  ): IO[Boolean] =
+  )(using TypeTest[Throwable, E]): IO[Boolean] =
     IO.uncancelable { poll =>
       poll(IO.race(shutdown, permits.acquire)).flatMap:
         case Left(()) => IO.pure(false)
@@ -270,12 +283,12 @@ object StreamServer:
 
   // Routes a finish/handler typed failure (E) or a handler defect (EmileError.IO) to onError, so one
   // connection never brings the server down. The socket is released by acceptAndFork's guarantee, not here.
-  private def serveConnection[K <: SocketKind, E](
+  private def serveConnection[K <: SocketKind, E <: Throwable](
     server: StreamServer[K],
     socket: Socket[K],
     onError: (EmileError.IO | E) => IO[Unit],
     handler: Socket[K] => EmIO[E, Unit]
-  ): IO[Unit] =
+  )(using TypeTest[Throwable, E]): IO[Unit] =
     server.acceptor
       .finish(socket)
       .either
