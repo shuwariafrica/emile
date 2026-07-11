@@ -44,7 +44,9 @@ jobs:
             dockerImage: shuwariafrica/el10-jdk:17
           # musl on Alpine 3.23 (release track, libuv 1.51.x, ships libuv-static for the static link).
           # These fail until scala-native PR #4934 (sigaltstack/SIGSTKSZ fix for musl) merges and a SN
-          # release ships - remove `continueOnError` on all four musl entries then.
+          # release ships. The dynamic-musl cells stay as non-blocking coverage; the static-musl cells are
+          # disabled entirely - the static link fails hard on the same defect and only adds red noise.
+          # On the SN release: uncomment both static cells and drop `continueOnError` from all four.
           - link: Dynamic
             family: linux
             arch: x86_64
@@ -59,20 +61,20 @@ jobs:
             runner: ubuntu-24.04-arm
             dockerImage: shuwariafrica/alpine-jdk:17
             continueOnError: true
-          - link: Static
-            family: linux
-            arch: x86_64
-            runtime: "-musl"
-            runner: ubuntu-24.04
-            dockerImage: shuwariafrica/alpine-jdk:17
-            continueOnError: true
-          - link: Static
-            family: linux
-            arch: aarch64
-            runtime: "-musl"
-            runner: ubuntu-24.04-arm
-            dockerImage: shuwariafrica/alpine-jdk:17
-            continueOnError: true
+          # - link: Static
+          #   family: linux
+          #   arch: x86_64
+          #   runtime: "-musl"
+          #   runner: ubuntu-24.04
+          #   dockerImage: shuwariafrica/alpine-jdk:17
+          #   continueOnError: true
+          # - link: Static
+          #   family: linux
+          #   arch: aarch64
+          #   runtime: "-musl"
+          #   runner: ubuntu-24.04-arm
+          #   dockerImage: shuwariafrica/alpine-jdk:17
+          #   continueOnError: true
     runs-on: ${{ matrix.runner }}
     continue-on-error: ${{ matrix.continueOnError == true }}
     env:
