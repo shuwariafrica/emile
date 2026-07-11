@@ -32,10 +32,9 @@ import com.comcast.ip4s.Ipv4Address
 import com.comcast.ip4s.Port
 import com.comcast.ip4s.SocketAddress
 
-/** Covers the [[EmileError]] vocabulary: each code-dispatch table is exercised by driving a real
-  * libuv operation to the failure it maps, with the collapsing `Unexpected` constructors and the
-  * [[SignalNumber]] / [[LoopConfig]] helpers this spec also houses.
-  */
+// Each code-dispatch table is exercised by driving a real libuv operation to the failure it maps,
+// rather than by asserting the mapping against itself. The Unexpected collapsing constructors and the
+// SignalNumber / LoopConfig helpers have no suite of their own and are covered here.
 final class EmileErrorSpec extends EmileSuite:
 
   private val anyLoopback: SocketAddress[IpAddress] =
@@ -167,6 +166,25 @@ final class EmileErrorSpec extends EmileSuite:
   test("System derives its message from the libuv error code") {
     val message = EmileError.Bind.System(ErrorCode(ErrorCode.UV_EADDRINUSE)).getMessage
     assert(message.startsWith("EADDRINUSE"), message)
+  }
+
+  test("a channel narrowed to payload-free cases reifies every arm") {
+    // Each case is a class, so the union erases to a common supertype and every arm passes the test the
+    // channel reifies. Singleton arms would erase to one of them, and the rest would surface as defects
+    // rather than the typed errors they are.
+    type Narrow = EmileError.IO.EndOfStream | EmileError.IO.ConnectionReset
+    val endOfStream: EmIO[Narrow, Unit] = EffIO.fail(EmileError.IO.EndOfStream)
+    val connectionReset: EmIO[Narrow, Unit] = EffIO.fail(EmileError.IO.ConnectionReset)
+    for
+      first <- endOfStream.either
+      second <- connectionReset.either
+    yield
+      first match
+        case Left(EmileError.IO.EndOfStream) => ()
+        case other => fail(s"expected EndOfStream, got: $other")
+      second match
+        case Left(EmileError.IO.ConnectionReset) => ()
+        case other => fail(s"expected ConnectionReset, got: $other")
   }
 
   test("read with a non-positive size fails with IO.InvalidArgument") {

@@ -37,16 +37,29 @@ sealed abstract class EmileError(message: String, cause: Option[Throwable])
   * offers named cases for the common failures, a `System(code)` catch-all for any other libuv code,
   * and an idempotent `Unexpected(cause)` wrapping a raw `Throwable` - an already-typed cause is
   * returned unchanged.
+  *
+  * Every case is a type as well as a value, so an [[EmIO]] channel narrows to the failures an
+  * operation can actually produce - `EmIO[IO.EndOfStream | IO.ConnectionReset, A]`.
   */
 object EmileError:
+
+  // Payload-free cases are a sealed abstract class with the case object as its sole inhabitant, so
+  // type positions name a class. A union arm named by a singleton type mis-erases on Scala 3.8.4 -
+  // the TypeTest a typed channel reifies casts its payload to one arm's class, and a value of any
+  // other arm then fails its own test.
 
   /** Failures from `TCP.bind` and `IPC.bind`. */
   sealed trait Bind extends EmileError
 
   object Bind:
-    case object AddressInUse extends EmileError("Address in use", None) with Bind
-    case object AddressNotAvailable extends EmileError("Address not available", None) with Bind
-    case object PermissionDenied extends EmileError("Permission denied", None) with Bind
+    sealed abstract class AddressInUse private () extends EmileError("Address in use", None) with Bind
+    case object AddressInUse extends AddressInUse
+
+    sealed abstract class AddressNotAvailable private () extends EmileError("Address not available", None) with Bind
+    case object AddressNotAvailable extends AddressNotAvailable
+
+    sealed abstract class PermissionDenied private () extends EmileError("Permission denied", None) with Bind
+    case object PermissionDenied extends PermissionDenied
 
     /** A bind address emile rejected before libuv - an over-long or empty IPC path, or a filesystem
       * mode requested on an abstract or autobind socket.
@@ -73,14 +86,29 @@ object EmileError:
   sealed trait Connect extends HostConnect
 
   object Connect:
-    case object ConnectionRefused extends EmileError("Connection refused", None) with Connect
-    case object NetworkUnreachable extends EmileError("Network unreachable", None) with Connect
-    case object HostUnreachable extends EmileError("Host unreachable", None) with Connect
-    case object AddressNotAvailable extends EmileError("Address not available", None) with Connect
-    case object TimedOut extends EmileError("Connection timed out", None) with Connect
-    case object PermissionDenied extends EmileError("Permission denied", None) with Connect
-    case object NotFound extends EmileError("No such file or directory", None) with Connect
-    case object TooManyOpenFiles extends EmileError("Too many open files", None) with Connect
+    sealed abstract class ConnectionRefused private () extends EmileError("Connection refused", None) with Connect
+    case object ConnectionRefused extends ConnectionRefused
+
+    sealed abstract class NetworkUnreachable private () extends EmileError("Network unreachable", None) with Connect
+    case object NetworkUnreachable extends NetworkUnreachable
+
+    sealed abstract class HostUnreachable private () extends EmileError("Host unreachable", None) with Connect
+    case object HostUnreachable extends HostUnreachable
+
+    sealed abstract class AddressNotAvailable private () extends EmileError("Address not available", None) with Connect
+    case object AddressNotAvailable extends AddressNotAvailable
+
+    sealed abstract class TimedOut private () extends EmileError("Connection timed out", None) with Connect
+    case object TimedOut extends TimedOut
+
+    sealed abstract class PermissionDenied private () extends EmileError("Permission denied", None) with Connect
+    case object PermissionDenied extends PermissionDenied
+
+    sealed abstract class NotFound private () extends EmileError("No such file or directory", None) with Connect
+    case object NotFound extends NotFound
+
+    sealed abstract class TooManyOpenFiles private () extends EmileError("Too many open files", None) with Connect
+    case object TooManyOpenFiles extends TooManyOpenFiles
 
     /** A connect argument emile rejected before reaching libuv - for example an
       * [[IPCAddress.Autobind]], which is bind-only.
@@ -117,25 +145,40 @@ object EmileError:
   sealed trait IO extends EmileError
 
   object IO:
-    case object EndOfStream extends EmileError("End of stream", None) with IO
-    case object ConnectionReset extends EmileError("Connection reset", None) with IO
-    case object BrokenPipe extends EmileError("Broken pipe", None) with IO
-    case object TimedOut extends EmileError("Connection timed out", None) with IO
-    case object NotFound extends EmileError("No such file or directory", None) with IO
-    case object PermissionDenied extends EmileError("Permission denied", None) with IO
-    case object TooManyOpenFiles extends EmileError("Too many open files", None) with IO
+    sealed abstract class EndOfStream private () extends EmileError("End of stream", None) with IO
+    case object EndOfStream extends EndOfStream
+
+    sealed abstract class ConnectionReset private () extends EmileError("Connection reset", None) with IO
+    case object ConnectionReset extends ConnectionReset
+
+    sealed abstract class BrokenPipe private () extends EmileError("Broken pipe", None) with IO
+    case object BrokenPipe extends BrokenPipe
+
+    sealed abstract class TimedOut private () extends EmileError("Connection timed out", None) with IO
+    case object TimedOut extends TimedOut
+
+    sealed abstract class NotFound private () extends EmileError("No such file or directory", None) with IO
+    case object NotFound extends NotFound
+
+    sealed abstract class PermissionDenied private () extends EmileError("Permission denied", None) with IO
+    case object PermissionDenied extends PermissionDenied
+
+    sealed abstract class TooManyOpenFiles private () extends EmileError("Too many open files", None) with IO
+    case object TooManyOpenFiles extends TooManyOpenFiles
 
     /** An operation attempted after the owning `Resource` released the socket, server, file, or
       * watcher, or after an abortive `closeReset`.
       */
-    case object AlreadyClosed extends EmileError("Resource already closed", None) with IO
+    sealed abstract class AlreadyClosed private () extends EmileError("Resource already closed", None) with IO
+    case object AlreadyClosed extends AlreadyClosed
 
     /** Operations on one socket must be serialised: a second read (or second write) started while
       * one is already in flight fails with this rather than racing the shared per-direction buffer.
       */
-    case object ConflictingOperation
+    sealed abstract class ConflictingOperation private ()
         extends EmileError("A concurrent operation conflicts with one already in flight on this resource", None)
         with IO
+    case object ConflictingOperation extends ConflictingOperation
 
     /** An operation argument emile rejected before reaching libuv - for example a keep-alive window
       * below one second.
@@ -187,12 +230,13 @@ object EmileError:
   sealed trait Runtime extends EmileError
 
   object Runtime:
-    case object MissingLibUVPollingSystem
+    sealed abstract class MissingLibUVPollingSystem private ()
         extends EmileError(
           "LibUVPollingSystem is not installed in this IORuntime. Use EmileIOApp or Emile.runtime.",
           None
         )
         with Runtime
+    case object MissingLibUVPollingSystem extends MissingLibUVPollingSystem
 
     final case class System(code: ErrorCode) extends EmileError("", None) with Runtime:
       override def getMessage: String = ErrorCode.describe(code)
