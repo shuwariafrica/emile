@@ -7,7 +7,7 @@ set -euo pipefail
 
 # --- Configuration ---
 # Define the main/parent GitHub repository
-: "${MAIN_REPO_OWNER:=arashi01}"
+: "${MAIN_REPO_OWNER:=shuwariafrica}"
 : "${MAIN_REPO_NAME:=emile}"
 
 # Define colors for output for better readability
