@@ -22,7 +22,7 @@ and fd-poll operation runs on the loop thread that owns its handle - the worker 
 `Future`/`Promise` indirection and no separate executor.
 
 It is **Native-first**: the public API is shaped for the Scala Native representation; the typed-error channel is
-`boilerplate.effect.EffIO[+E, +A]`.
+`boilerplate.effect.EffIO[+E <: Throwable, +A]`.
 
 ## Modules
 
@@ -165,7 +165,7 @@ import emile.*
 // A signal the caller completes to begin a graceful stop.
 Deferred[IO, Unit].flatMap: shutdown =>
   val echo = (socket: TCPSocket) => socket.reads.through(socket.writes).compile.drain
-  server.serve(4096, shutdown.get)(err => IO.println(s"connection failed: $err"))(echo)
+  server.serve(4096, shutdown.get)(echo)(err => IO.println(s"connection failed: $err"))
 ```
 
 Up to `maxConcurrent` handlers run at once. A failure in one handler - or in the accept loop - is reported through
@@ -315,8 +315,9 @@ substrate the typed-error channel already rides:
 
 ## Typed errors as values
 
-emile's effect alias is `EmIO[+E, +A] = boilerplate.effect.EffIO[E, A] = IO[Either[E, A]]` - covariant in both `E` and
-`A`. Every fallible operation publishes its precise error type:
+emile's effect alias is `EmIO[+E <: Throwable, +A] = boilerplate.effect.EffIO[E, A]`, covariant in both `E` and `A`.
+`E` is a compile-time phantom: a failure rides `IO`'s own `Throwable` channel, so the success path allocates no
+`Either` and `.absolve` is an identity. Every fallible operation publishes its precise error type:
 
 ```scala
 def bind(addr: SocketAddress[IpAddress]): EmResource[EmileError.Bind, TCPServer]
@@ -332,16 +333,23 @@ socket-option error, not a connect one.
 `EmileError` is a sealed hierarchy with sub-traits per operation family (`Bind`, `Connect`, `DNS`, `IO`, `HostConnect`,
 `Runtime`); each carries named domain cases plus a `System(code: ErrorCode)` for unanticipated libuv codes and an
 `Unexpected(cause: Throwable)` for non-`EmileError` defects. `EmileError <: Exception`, so projecting onto plain `IO`'s
-`Throwable` channel via `.absolve` is lossless - the carried value remains pattern-matchable.
+`Throwable` channel via `.absolve` is lossless - the carried value remains pattern-matchable. Every case is a type as
+well as a value, so a channel can name exactly the failures it carries - for example
+`EmIO[EmileError.IO.EndOfStream | EmileError.IO.ConnectionReset, A]`.
+
+Because the failure rides `IO`'s own channel, the cats-effect and fs2 error combinators see it: `handleErrorWith` over
+an `EmStream` recovers a typed `EmileError` as well as a defect, a `Resource` finaliser observes `ExitCase.Errored`,
+and a typed failure in one branch of `IO.both` cancels the other. To act on defects alone, reify the typed channel
+first: `eff.either.attempt` yields `Left(defect)` and `Right(Left(typed))`.
 
 The companion stream and resource aliases follow the same shape:
 
-| Alias                  | = | Variance in `E` |
+| Alias                          | = | Variance in `E` |
 |---|---|---|
-| `EmIO[+E, +A]`         | `EffIO[E, A]`            | covariant |
-| `EmStream[+E, +A]`     | `Stream[EffIO.Of[E], A]` | covariant |
-| `EmResource[E, A]`     | `Resource[EffIO.Of[E], A]` | invariant (widen with `r.widen[E2]`) |
-| `EmPipe[E, -I, +O]`    | `Pipe[EffIO.Of[E], I, O]` | invariant; apply with `through` |
+| `EmIO[+E <: Throwable, +A]`    | `EffIO[E, A]`            | covariant |
+| `EmStream[+E <: Throwable, +A]`| `Stream[EffIO.Of[E], A]` | covariant |
+| `EmResource[E <: Throwable, A]`| `Resource[EffIO.Of[E], A]` | invariant (widen with `r.widen[E2]`) |
+| `EmPipe[E <: Throwable, -I, +O]`| `Pipe[EffIO.Of[E], I, O]` | invariant; apply with `through` |
 
 ### Bringing your own error type
 
@@ -373,6 +381,14 @@ val recovered: EmIO[EmileError.IO, Unit] =
 
 `catchOnly` (recover one arm of a union error), `catchSome` (recover the errors a `PartialFunction` handles, the rest
 pass through), and the other typed-error combinators come from `boilerplate.effect`.
+
+Observing a typed channel tests the raised `Throwable` against `E`, so `E` must be testable at run time: a sealed root,
+or a union of classes. Name a case by its class, never by a singleton type - on Scala 3.8.4 a union of singleton types
+(`Rejected.type | Malformed.type`) erases to one arm, and a value of any other arm fails its own test, reaching
+`serve`'s `onError` as an `Unexpected` defect rather than the typed error it is. An `enum` is safe, as is a sealed root
+whose payload-free cases are `sealed abstract class Rejected private ()` with `case object Rejected extends Rejected` -
+the shape `EmileError` itself uses. Wrapping `serve` in a helper that is generic in `E` means propagating its
+`using TypeTest[Throwable, E]`.
 
 Since `EmileError.IO | EmileError.IO` is just `EmileError.IO`, a callback whose own errors are `EmileError.IO` leaves
 you a plain `EmIO[EmileError.IO, A]` to match - no union to unwrap.
