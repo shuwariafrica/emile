@@ -49,3 +49,4 @@ object StressSuite:
       .build()
     java.lang.Runtime.getRuntime.addShutdownHook(new Thread(() => rt.shutdown(), "emile-stress-shutdown"))
     rt
+end StressSuite
