@@ -439,8 +439,8 @@ socket.asFs2: fs2.io.net.Socket[IO]                                  // a TCPSoc
 server.acceptFs2: fs2.Stream[IO, fs2.io.net.Socket[IO]]              // accept stream onto IO
 ```
 
-The adapters cover per-connection interop with the fs2 ecosystem (the s2n-tls `TLSContext` wrappers, byte-level codecs,
-etc.). They project emile's typed-error channel onto `IO`'s `Throwable` channel via `EffIO.absolve` - lossless, since
+The adapters cover per-connection interop with the fs2 ecosystem (byte-level codecs, framing, and similar per-socket
+tooling). They project emile's typed-error channel onto `IO`'s `Throwable` channel via `EffIO.absolve` - lossless, since
 `EmileError <: Exception`.
 
 emile-fs2 deliberately does not implement `fs2.io.net.Network[IO]`. `Network[F]` is sealed in fs2; the principled path
