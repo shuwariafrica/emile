@@ -90,6 +90,10 @@ private[emile] object LibUV:
 
   type AllocCB = CFuncPtr3[Ptr[Byte], CSize, Ptr[Buf], Unit]
   type ReadCB = CFuncPtr3[Ptr[Byte], CSSize, Ptr[Buf], Unit]
+  // uv_udp_recv_cb: (handle, nread, buf, sockaddr* addr, flags). addr is NULL on the drained /
+  // recvmmsg-free sentinels and non-NULL for a real datagram (an empty one included).
+  type UDPRecvCB = CFuncPtr5[Ptr[Byte], CSSize, Ptr[Buf], Ptr[Byte], CUnsignedInt, Unit]
+  type UDPSendCB = CFuncPtr2[Ptr[Byte], CInt, Unit]
   type WriteCB = CFuncPtr2[Ptr[Byte], CInt, Unit]
   type ConnectCB = CFuncPtr2[Ptr[Byte], CInt, Unit]
   type ShutdownCB = CFuncPtr2[Ptr[Byte], CInt, Unit]
@@ -157,10 +161,23 @@ private[emile] object LibUV:
   inline val UV_CONNECT = 2
   inline val UV_WRITE = 3
   inline val UV_SHUTDOWN = 4
+  inline val UV_UDP_SEND = 5
   inline val UV_FS = 6
   inline val UV_GETADDRINFO = 8
   inline val UV_GETNAMEINFO = 9
   inline val UV_RANDOM = 10
+
+  // uv_udp_flags emile's portable baseline uses: IPV6ONLY disables dual-stack on an AF_INET6 bind;
+  // REUSEPORT is the 1.49 load-balancing flag (ENOTSUP off Linux-class platforms); RECVMMSG opts a
+  // handle into batched receive at init_ex. The steal-semantics REUSEADDR and the truncation-flag
+  // PARTIAL are deliberately unused (a >= 64 KiB alloc makes truncation impossible).
+  inline val UV_UDP_IPV6ONLY = 1
+  inline val UV_UDP_REUSEPORT = 64
+  inline val UV_UDP_RECVMMSG = 256
+
+  // uv_membership.
+  inline val UV_LEAVE_GROUP = 0
+  inline val UV_JOIN_GROUP = 1
 
   // uv_run_mode.
   inline val UV_RUN_ONCE = 1
@@ -301,6 +318,56 @@ private[unsafe] object LibUVExtern:
   def uv_poll_init(loop: Ptr[Byte], handle: Ptr[Byte], fd: CInt): CInt = extern
   def uv_poll_start(handle: Ptr[Byte], events: CInt, pollCb: LibUV.PollCB): CInt = extern
   def uv_poll_stop(handle: Ptr[Byte]): CInt = extern
+
+  // uv_udp_t: the portable datagram handle. init_ex carries the UV_UDP_RECVMMSG flag for batched
+  // receive; try_send2 (1.50+) sends a whole batch through sendmmsg. The membership / multicast /
+  // ttl setters take dotted / colon address strings, not sockaddrs.
+  def uv_udp_init(loop: Ptr[Byte], handle: Ptr[Byte]): CInt = extern
+  def uv_udp_init_ex(loop: Ptr[Byte], handle: Ptr[Byte], flags: CUnsignedInt): CInt = extern
+  def uv_udp_bind(handle: Ptr[Byte], addr: Ptr[Byte], flags: CUnsignedInt): CInt = extern
+  def uv_udp_connect(handle: Ptr[Byte], addr: Ptr[Byte]): CInt = extern
+  def uv_udp_getsockname(handle: Ptr[Byte], name: Ptr[Byte], nameLen: Ptr[CInt]): CInt = extern
+  def uv_udp_getpeername(handle: Ptr[Byte], name: Ptr[Byte], nameLen: Ptr[CInt]): CInt = extern
+  def uv_udp_send(
+    req: Ptr[Byte],
+    handle: Ptr[Byte],
+    bufs: Ptr[LibUV.Buf],
+    nbufs: CUnsignedInt,
+    addr: Ptr[Byte],
+    sendCb: LibUV.UDPSendCB
+  ): CInt = extern
+  def uv_udp_try_send(handle: Ptr[Byte], bufs: Ptr[LibUV.Buf], nbufs: CUnsignedInt, addr: Ptr[Byte]): CInt = extern
+  // Batched try-send: count datagrams, each described by a bufs[i] vector of nbufs[i] buffers to
+  // addrs[i]; returns the number of datagrams sent, negative only if the first fails. flags must be 0.
+  def uv_udp_try_send2(
+    handle: Ptr[Byte],
+    count: CUnsignedInt,
+    bufs: Ptr[Ptr[LibUV.Buf]],
+    nbufs: Ptr[CUnsignedInt],
+    addrs: Ptr[Ptr[Byte]],
+    flags: CUnsignedInt
+  ): CInt = extern
+  def uv_udp_recv_start(handle: Ptr[Byte], allocCb: LibUV.AllocCB, recvCb: LibUV.UDPRecvCB): CInt = extern
+  def uv_udp_recv_stop(handle: Ptr[Byte]): CInt = extern
+  def uv_udp_using_recvmmsg(handle: Ptr[Byte]): CInt = extern
+  def uv_udp_set_membership(
+    handle: Ptr[Byte],
+    multicastAddr: CString,
+    interfaceAddr: CString,
+    membership: CInt
+  ): CInt = extern
+  def uv_udp_set_source_membership(
+    handle: Ptr[Byte],
+    multicastAddr: CString,
+    interfaceAddr: CString,
+    sourceAddr: CString,
+    membership: CInt
+  ): CInt = extern
+  def uv_udp_set_multicast_loop(handle: Ptr[Byte], on: CInt): CInt = extern
+  def uv_udp_set_multicast_ttl(handle: Ptr[Byte], ttl: CInt): CInt = extern
+  def uv_udp_set_multicast_interface(handle: Ptr[Byte], interfaceAddr: CString): CInt = extern
+  def uv_udp_set_broadcast(handle: Ptr[Byte], on: CInt): CInt = extern
+  def uv_udp_set_ttl(handle: Ptr[Byte], ttl: CInt): CInt = extern
 
   def uv_signal_init(loop: Ptr[Byte], handle: Ptr[Byte]): CInt = extern
   def uv_signal_start(handle: Ptr[Byte], signalCb: LibUV.SignalCB, signum: CInt): CInt = extern
@@ -482,6 +549,14 @@ private[unsafe] object LibUVExtern:
   def uv_ip6_addr(ip: CString, port: CInt, addr: Ptr[Byte]): CInt = extern
   def uv_ip4_name(src: Ptr[Byte], dst: CString, size: CSize): CInt = extern
   def uv_ip6_name(src: Ptr[Byte], dst: CString, size: CSize): CInt = extern
+
+  // System memory queries. free / total return 0 when unknown; constrained returns 0 (no limit /
+  // unknown) or UINT64_MAX (a limiting mechanism exists but no limit is set); available equals free
+  // when unconstrained.
+  def uv_get_free_memory(): CUnsignedLongLong = extern
+  def uv_get_total_memory(): CUnsignedLongLong = extern
+  def uv_get_constrained_memory(): CUnsignedLongLong = extern
+  def uv_get_available_memory(): CUnsignedLongLong = extern
 
   def uv_strerror_r(err: CInt, buf: CString, buflen: CSize): CString = extern
   def uv_err_name_r(err: CInt, buf: CString, buflen: CSize): CString = extern

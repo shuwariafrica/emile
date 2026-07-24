@@ -95,6 +95,7 @@ object ErrorCode:
   val UV_ENOTEMPTY: Int = -errno.ENOTEMPTY
   val UV_ENOTDIR: Int = -errno.ENOTDIR
   val UV_EISDIR: Int = -errno.EISDIR
+  val UV_EMSGSIZE: Int = -errno.EMSGSIZE
 
   // libuv pseudo-codes with no errno - fixed on every platform, hence literals.
   inline val UV_EOF = -4095

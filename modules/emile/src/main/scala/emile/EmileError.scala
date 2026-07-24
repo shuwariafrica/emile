@@ -184,6 +184,14 @@ object EmileError:
     sealed abstract class IsADirectory private () extends EmileError("Is a directory", None) with IO
     case object IsADirectory extends IsADirectory
 
+    /** A datagram exceeded the path MTU with fragmentation forbidden (`EMSGSIZE`) - the send would
+      * fragment or exceed the link, and the Don't-Fragment policy rejected it locally before
+      * transmission. On a `UDPChannel` under `PmtudMode.Do` or `PmtudMode.Probe` this is the signal
+      * a DPLPMTUD probe loop branches on (RFC 9000 s14.2, RFC 8899 s3).
+      */
+    sealed abstract class MessageTooLarge private () extends EmileError("Message too large", None) with IO
+    case object MessageTooLarge extends MessageTooLarge
+
     /** An operation attempted after the owning `Resource` released the socket, server, file, or
       * watcher, or after an abortive `closeReset`.
       */
@@ -382,6 +390,7 @@ private[emile] object IOMapping:
     case ErrorCode.UV_ENOTEMPTY => EmileError.IO.DirectoryNotEmpty
     case ErrorCode.UV_ENOTDIR => EmileError.IO.NotADirectory
     case ErrorCode.UV_EISDIR => EmileError.IO.IsADirectory
+    case ErrorCode.UV_EMSGSIZE => EmileError.IO.MessageTooLarge
     case other => EmileError.IO.System(ErrorCode(other))
 
 /** Maps a `uv_spawn` exec errno to a typed [[EmileError.Spawn]], falling through to
