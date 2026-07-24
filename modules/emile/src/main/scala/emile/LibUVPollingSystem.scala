@@ -15,6 +15,11 @@
  */
 package emile
 
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
+import scala.concurrent.ExecutionContext
+
 import cats.effect.IO
 import cats.effect.unsafe.PollResult
 import cats.effect.unsafe.PollingContext
@@ -28,7 +33,7 @@ import emile.unsafe.SignalSupervisor
   * into each work-stealing worker. Build it through [[LibUVPollingSystem$ LibUVPollingSystem]] and
   * install it with [[EmileIOApp]] or [[Emile.runtime]].
   */
-final class LibUVPollingSystem private (config: LoopConfig) extends PollingSystem:
+final class LibUVPollingSystem private (config: LoopConfig, offloadParallelism: Int) extends PollingSystem:
 
   type Api = LibUVPollingSystem.Access
   type Poller = LibUVPoller
@@ -37,8 +42,23 @@ final class LibUVPollingSystem private (config: LoopConfig) extends PollingSyste
   // (LibUVPollingSystem.currentSupervisor), so a second runtime is never blocked by a first's dead one.
   private val signals: SignalSupervisor = new SignalSupervisor
 
+  // The offload lane: a bounded fixed pool onto which the `offload` combinator shifts CPU-heavy work,
+  // off the loop workers so they keep servicing I/O. Daemon threads, so the pool never holds the process
+  // open. One lane per runtime, reached through the Access handle (LibUVPollingSystem.currentOffload).
+  private val offloadThreads: ExecutorService =
+    val counter = new AtomicInteger(0)
+    Executors.newFixedThreadPool(
+      offloadParallelism,
+      (r: Runnable) =>
+        val thread = new Thread(r, s"emile-offload-${counter.getAndIncrement()}")
+        thread.setDaemon(true)
+        thread
+    )
+
+  private val offloadLane: ExecutionContext = ExecutionContext.fromExecutor(offloadThreads)
+
   def makeApi(ctx: PollingContext[LibUVPoller]): LibUVPollingSystem.Access =
-    new LibUVPollingSystem.Access(ctx, signals)
+    new LibUVPollingSystem.Access(ctx, signals, offloadLane)
 
   def makePoller(): LibUVPoller =
     val p = new LibUVPoller(config)
@@ -56,7 +76,9 @@ final class LibUVPollingSystem private (config: LoopConfig) extends PollingSyste
 
   def interrupt(t: Thread, p: LibUVPoller): Unit = p.interrupt()
 
-  def close(): Unit = ()
+  // The work-stealing pool invokes this at runtime shutdown; an orderly shutdown lets any in-flight
+  // offloaded compute finish while refusing new work.
+  def close(): Unit = offloadThreads.shutdown()
 
   def metrics(p: LibUVPoller): PollerMetrics = p.metrics
 
@@ -67,16 +89,29 @@ end LibUVPollingSystem
   */
 object LibUVPollingSystem:
 
-  /** A libuv polling system with the default [[LoopConfig]]. */
+  /** A libuv polling system with the default [[LoopConfig]] and offload-lane parallelism. */
   def apply(): LibUVPollingSystem = apply(LoopConfig.default)
 
-  /** A libuv polling system tuned by `config`. */
-  def apply(config: LoopConfig): LibUVPollingSystem = new LibUVPollingSystem(config)
+  /** A libuv polling system tuned by `config`, with the default offload-lane parallelism. */
+  def apply(config: LoopConfig): LibUVPollingSystem = apply(config, defaultOffloadParallelism)
+
+  /** A libuv polling system tuned by `config`, with an offload lane of `offloadParallelism`
+    * threads.
+    */
+  def apply(config: LoopConfig, offloadParallelism: Int): LibUVPollingSystem =
+    new LibUVPollingSystem(config, offloadParallelism)
+
+  /** The default offload-lane parallelism - one thread per available processor. */
+  def defaultOffloadParallelism: Int = java.lang.Runtime.getRuntime.availableProcessors()
 
   /** The worker-facing handle onto a [[emile.unsafe.LibUVPoller LibUVPoller]] - obtains the calling
-    * worker's poller, its runtime's signal supervisor, and tests poller ownership.
+    * worker's poller, its runtime's signal supervisor and offload lane, and tests poller ownership.
     */
-  final class Access private[emile] (ctx: PollingContext[LibUVPoller], private[emile] val signals: SignalSupervisor):
+  final class Access private[emile] (
+    ctx: PollingContext[LibUVPoller],
+    private[emile] val signals: SignalSupervisor,
+    private[emile] val offload: ExecutionContext
+  ):
 
     private[emile] def withCurrentPoller[A](f: LibUVPoller => IO[A]): IO[A] =
       IO.async_[LibUVPoller](cb => ctx.accessPoller(p => cb(Right(p)))).flatMap(f)
@@ -103,6 +138,17 @@ object LibUVPollingSystem:
     IO.pollers.flatMap: pollers =>
       pollers.collectFirst { case access: Access => access } match
         case Some(access) => IO.pure(access.signals)
+        case None => IO.raiseError(EmileError.Runtime.MissingLibUVPollingSystem)
+
+  /** The calling runtime's offload lane - the bounded compute pool through which the `offload`
+    * combinator shifts CPU-heavy work off the loop workers. Fails with
+    * `EmileError.Runtime.MissingLibUVPollingSystem` when the runtime carries no libuv polling
+    * system.
+    */
+  private[emile] def currentOffload: IO[ExecutionContext] =
+    IO.pollers.flatMap: pollers =>
+      pollers.collectFirst { case access: Access => access } match
+        case Some(access) => IO.pure(access.offload)
         case None => IO.raiseError(EmileError.Runtime.MissingLibUVPollingSystem)
 
 end LibUVPollingSystem

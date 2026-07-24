@@ -26,6 +26,7 @@ import scala.scalanative.posix.sys.socket as posixSocket
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
+import boilerplate.Slice
 import boilerplate.effect.EffIO
 import cats.effect.IO
 import cats.effect.Resource
@@ -59,8 +60,8 @@ final private class StreamSocketState(
   var outputShutdown: Boolean = false // scalafix:ok DisableSyntax.var
   // Single-reader guard. Every read mode drives the one per-socket readBuffer and the handle's single
   // read-callback slot, so a second concurrent reader overwrites the first's in-flight read - silent
-  // corruption. Held for a read's whole span, including the f that consumes readPtr's raw buffer, so a
-  // concurrent reader fails fast instead. Owner-confined like the flags above.
+  // corruption. Held for a read's whole span, including the f that consumes the read's borrowed slice, so
+  // a concurrent reader fails fast instead. Owner-confined like the flags above.
   var reading: Boolean = false // scalafix:ok DisableSyntax.var
   // The in-flight read's terminal action, set when a read arms and cleared when it stops - non-null
   // exactly while a receiver holds the read-callback slot. closeReset fires it before it stops the
@@ -113,8 +114,8 @@ type AddressOf[K <: SocketKind] = K match
   * the socket's resource has released is a typed [[EmileError.IO.AlreadyClosed]], not a
   * use-after-free.
   *
-  * The read modes ([[reads]], [[read]], [[readN]], [[readPtr]], [[consume]]) share one per-socket
-  * buffer, so a socket has a single reader: starting one while another is in flight fails fast with
+  * The read modes ([[reads]], [[read]], [[readN]], [[consume]]) share one per-socket buffer, so a
+  * socket has a single reader: starting one while another is in flight fails fast with
   * [[EmileError.IO.ConflictingOperation]]. Reading and writing concurrently is fine - they are
   * independent directions.
   */
@@ -191,29 +192,43 @@ object Socket:
     inline def write(chunks: Seq[Chunk[Byte]]): EmIO[EmileError.IO, Unit] =
       writeChunks(socket, chunks)
 
-    /** Reads one chunk and hands `f` a pointer into the receive buffer, sparing the copy [[read]]
-      * makes. The pointer is valid only while `f` runs - the next read reuses the buffer - so `f`
-      * must not retain it. `None` once the peer half-closes.
+    /** Reads one chunk and hands `f` a borrowed [[boilerplate.Slice Slice]] over the receive
+      * buffer, sparing the copy the `Chunk`-returning read makes. The slice - and the memory it
+      * views - is valid only while `f` runs, as the next read reuses the buffer, so `f` must not
+      * retain it; copy out with `slice.toArray` to persist a value beyond it. `None` once the peer
+      * half-closes.
       */
-    @targetName("ext_readPtr")
-    inline def readPtr[E <: Throwable, A](f: (Ptr[Byte], Int) => EmIO[E, A]): EmIO[EmileError.IO | E, Option[A]] =
+    @targetName("ext_readSlice")
+    inline def read[E <: Throwable, A](f: Slice => EmIO[E, A]): EmIO[EmileError.IO | E, Option[A]] =
       readPtrOnce(socket, f)
 
-    /** Zero-copy write of `len` bytes from `buf`. The caller owns `buf` and must keep it valid
-      * until the effect completes.
+    /** Write `slice` with no copy. The region is borrowed by the write until the effect completes,
+      * so do not mutate the written range while it is in flight; an array-backed slice keeps its
+      * backing array reachable for the duration, and a pointer-backed slice inherits
+      * [[boilerplate.Slice Slice]]'s caller-keeps-alive contract. A reusable write scratch is a
+      * codec-owned `Array[Byte]` filled then framed as `Slice.of(array, 0, n)`, its completion
+      * sequenced before the next fill; see the write-path section of the README.
       */
-    @targetName("ext_writePtr")
-    inline def writePtr(buf: Ptr[Byte], len: Int): EmIO[EmileError.IO, Unit] =
-      writeRaw(socket, buf, len)
+    @targetName("ext_writeSlice")
+    inline def write(slice: Slice): EmIO[EmileError.IO, Unit] =
+      writeSlice(socket, slice)
 
-    /** Synchronous best-effort write of `len` bytes from `buf` on the owning loop thread via
-      * `uv_try_write` - no queueing, no callback. Returns the bytes accepted immediately, which may
-      * be fewer than `len` (or zero when the send buffer is full); write the remainder with
-      * [[writePtr]]. The caller owns `buf`.
+    /** Write `slices` as one ordered, atomic `uv_write` gathering every region, so a batch cannot
+      * interleave with a concurrent writer. Empty slices are skipped; each region is borrowed until
+      * the effect completes, as with the single-slice `write`.
       */
-    @targetName("ext_tryWritePtr")
-    inline def tryWritePtr(buf: Ptr[Byte], len: Int): EmIO[EmileError.IO, Int] =
-      tryWrite(socket, buf, len)
+    @targetName("ext_writeSlices")
+    inline def write(slices: Seq[Slice]): EmIO[EmileError.IO, Unit] =
+      writeSlices(socket, slices)
+
+    /** Synchronous best-effort write of `slice` on the owning loop thread via `uv_try_write` - no
+      * queueing, no callback. Returns the bytes accepted immediately, which may be fewer than
+      * `slice.length` (or zero when the send buffer is full); write the remainder with
+      * `write(slice.drop(n))`. The region is borrowed for the call only.
+      */
+    @targetName("ext_tryWrite")
+    inline def tryWrite(slice: Slice): EmIO[EmileError.IO, Int] =
+      tryWriteSlice(socket, slice)
 
     /** Zero-copy kernel-to-socket via `uv_fs_sendfile` - one best-effort syscall, returning the
       * bytes actually sent, which may be fewer than `length` (0 when the socket send buffer is
@@ -226,13 +241,13 @@ object Socket:
     inline def sendFile(file: OpenFile, offset: Long, length: Long): EmIO[EmileError.IO, Long] =
       sendFileFromOpen(socket, file, offset, length)
 
-    /** Reads continuously, running `onChunk` inline on the owning loop thread for each chunk until
-      * end of input - the persistent form of [[readPtr]]. `onChunk` therefore must neither block
-      * (it would stall that worker's I/O) nor retain its pointer past returning; a `Left(e)` stops
-      * the read early.
+    /** Reads continuously, running `onChunk` inline on the owning loop thread with a borrowed
+      * [[boilerplate.Slice Slice]] over each chunk until end of input - the persistent form of the
+      * borrowed `read`. `onChunk` therefore must neither block (it would stall that worker's I/O)
+      * nor retain its slice past returning; a `Left(e)` stops the read early.
       */
     @targetName("ext_consume")
-    inline def consume[E <: Throwable](onChunk: (Ptr[Byte], Int) => Either[E, Unit]): EmIO[EmileError.IO | E, Unit] =
+    inline def consume[E <: Throwable](onChunk: Slice => Either[E, Unit]): EmIO[EmileError.IO | E, Unit] =
       consumeAll(socket, onChunk)
 
     /** Runs `thunk` on the socket's owning loop thread, so thread-unsafe C state - a stateful
@@ -407,9 +422,9 @@ object Socket:
   // The single-reader guard wrapping each public read entry. The claim is taken on the owner thread and
   // released on every outcome; bracket takes it uncancelably, keeps the read itself cancelable, and skips
   // the release when the claim was not taken. The persistent reads stream uses readingResource for the
-  // same effect across the Resource scope. read / readN keep the EmileError.IO channel; readPtr / consume
-  // run withReadingApp, whose claim widens onto the union channel (its AlreadyClosed / ConflictingOperation
-  // are the EmileError.IO arm).
+  // same effect across the Resource scope. read(maxBytes) / readN keep the EmileError.IO channel; the
+  // borrowed-slice read / consume run withReadingApp, whose claim widens onto the union channel (its
+  // AlreadyClosed / ConflictingOperation are the EmileError.IO arm).
   private def withReading[A](socket: StreamSocketState)(body: => EmIO[EmileError.IO, A]): EmIO[EmileError.IO, A] =
     acquireReading(socket).bracket(_ => body)(_ => releaseReading(socket))
 
@@ -494,18 +509,19 @@ object Socket:
 
   private def readPtrOnce[E <: Throwable, A](
     socket: StreamSocketState,
-    f: (Ptr[Byte], Int) => EmIO[E, A]
+    f: Slice => EmIO[E, A]
   ): EmIO[EmileError.IO | E, Option[A]] =
     withReadingApp(socket)(readPtrOnceArm(socket, f))
 
   // The read failure widens onto the EmileError.IO arm of the union and f's own failure onto the E arm.
+  // The delivered (ptr, len) is framed as a borrowed Slice at the hand-off; f must not retain it.
   private def readPtrOnceArm[E <: Throwable, A](
     socket: StreamSocketState,
-    f: (Ptr[Byte], Int) => EmIO[E, A]
+    f: Slice => EmIO[E, A]
   ): EmIO[EmileError.IO | E, Option[A]] =
     val delivered: EmIO[EmileError.IO | E, Option[(Ptr[Byte], Int)]] = readPtrDeliver(socket)
     delivered.flatMap:
-      case Some((ptr, len)) => f(ptr, len).map(Some(_))
+      case Some((ptr, len)) => f(Slice.of(ptr, len)).map(Some(_))
       case None => EffIO.succeed(None)
 
   private def readPtrDeliver(socket: StreamSocketState): EmIO[EmileError.IO, Option[(Ptr[Byte], Int)]] =
@@ -645,17 +661,13 @@ object Socket:
       state.terminated = true
       state.queue.unsafeTryOffer(Left(err)): Unit
 
-  private def consumeAll[E <: Throwable](
-    socket: StreamSocketState,
-    onChunk: (Ptr[Byte], Int) => Either[E, Unit]): EmIO[EmileError.IO | E, Unit] =
+  private def consumeAll[E <: Throwable](socket: StreamSocketState, onChunk: Slice => Either[E, Unit]): EmIO[EmileError.IO | E, Unit] =
     withReadingApp(socket)(consumeAllArm(socket, onChunk))
 
   // asyncAttempt folds a registration-time throwable only, so it never sees - and so never mis-wraps - the
   // typed outcome the callback delivers on the same channel. Unexpected is idempotent, so Routing's own
   // AlreadyClosed passes through and only a true defect is wrapped.
-  private def consumeAllArm[E <: Throwable](
-    socket: StreamSocketState,
-    onChunk: (Ptr[Byte], Int) => Either[E, Unit]): EmIO[EmileError.IO | E, Unit] =
+  private def consumeAllArm[E <: Throwable](socket: StreamSocketState, onChunk: Slice => Either[E, Unit]): EmIO[EmileError.IO | E, Unit] =
     EffIO.asyncAttempt[EmileError.IO | E, Unit](EmileError.IO.Unexpected(_)) { cb =>
       Routing.onOwner(poller(socket)):
         LiveHandle.tryUse(socket.live, closedConsume(cb)): handle =>
@@ -675,7 +687,7 @@ object Socket:
   private def consumeReceiver[E <: Throwable](
     socket: StreamSocketState,
     cb: Either[EmileError.IO | E, Unit] => Unit,
-    onChunk: (Ptr[Byte], Int) => Either[E, Unit]
+    onChunk: Slice => Either[E, Unit]
   ): ReadReceiver =
     ReadReceiver(
       alloc = (_, bufOut) =>
@@ -689,7 +701,7 @@ object Socket:
           recordRead(socket, nreadInt)
           if nreadInt > 0 then
             val outcome: Either[EmileError.IO | E, Unit] =
-              try onChunk(buf._1, nreadInt)
+              try onChunk(Slice.of(buf._1, nreadInt))
               catch case t: Throwable => Left(EmileError.IO.Unexpected(t))
             outcome match
               case Right(()) => () // keep the watcher armed for the next chunk
@@ -706,7 +718,7 @@ object Socket:
       terminate = err => cb(Left(err))
     )
 
-  // Keeps the chunk reachable across the in-flight uv_write, and carries the poller the writeCb
+  // Keeps the written region reachable across the in-flight uv_write, and carries the poller the writeCb
   // trampoline needs to release the request's anchor.
   final private class WriteState(
     val socket: StreamSocketState,
@@ -714,9 +726,6 @@ object Socket:
     val cb: Either[Throwable, Unit] => Unit,
     @scala.annotation.unused val keepAlive: AnyRef
   )
-
-  // Keep-alive sentinel for writePtr: the caller owns the buffer, so nothing of ours must stay reachable.
-  private val NoKeepAlive: AnyRef = new AnyRef
 
   private def writeChunk(socket: StreamSocketState, chunk: Chunk[Byte]): EmIO[EmileError.IO, Unit] =
     EffIO.attempt(
@@ -735,20 +744,44 @@ object Socket:
       EmileError.IO.Unexpected(_)
     )
 
-  private def writeRaw(socket: StreamSocketState, buf: Ptr[Byte], len: Int): EmIO[EmileError.IO, Unit] =
+  // The keep-alive is the Slice itself: an array-backed slice roots its backing array transitively,
+  // and a pointer-backed slice holds no reference, matching Slice's own caller-keeps-alive contract.
+  private def writeSlice(socket: StreamSocketState, slice: Slice): EmIO[EmileError.IO, Unit] =
     EffIO.attempt(
       IO.async[Unit] { cb =>
         Routing.onOwner(poller(socket)):
-          if len <= 0 then
+          if slice.isEmpty then
             cb(Right(()))
             None
           else
             LiveHandle.tryUse(socket.live, closedAsync(cb)): handle =>
-              submitWrite(socket, handle, buf, len, cb, NoKeepAlive)
+              submitWrite(socket, handle, slice.unsafePtr, slice.length, cb, slice)
               None
       },
       EmileError.IO.Unexpected(_)
     )
+
+  private def writeSlices(socket: StreamSocketState, slices: Seq[Slice]): EmIO[EmileError.IO, Unit] =
+    EffIO.attempt(
+      IO.async[Unit] { cb =>
+        Routing.onOwner(poller(socket)):
+          val buffers = slices.iterator.filterNot(_.isEmpty).toVector
+          if buffers.isEmpty then
+            cb(Right(()))
+            None
+          else
+            LiveHandle.tryUse(socket.live, closedAsync(cb)): handle =>
+              submitWriteV(socket, handle, buffers, cb)
+              None
+      },
+      EmileError.IO.Unexpected(_)
+    )
+
+  // A Chunk's backing array framed as a Slice, for the shared vectored-write path. The Slice roots the
+  // array through its anchor, keeping it reachable across the in-flight write.
+  private def chunkToSlice(chunk: Chunk[Byte]): Slice =
+    val arr = chunk.toArraySlice
+    Slice.of(arr.values, arr.offset, arr.length)
 
   private def submitWrite(
     socket: StreamSocketState,
@@ -791,13 +824,13 @@ object Socket:
     EffIO.attempt(
       IO.async[Unit] { cb =>
         Routing.onOwner(poller(socket)):
-          val slices = chunks.iterator.filter(_.nonEmpty).map(_.toArraySlice).toVector
-          if slices.isEmpty then
+          val buffers = chunks.iterator.filter(_.nonEmpty).map(chunkToSlice).toVector
+          if buffers.isEmpty then
             cb(Right(()))
             None
           else
             LiveHandle.tryUse(socket.live, closedAsync(cb)): handle =>
-              submitWriteV(socket, handle, slices, cb)
+              submitWriteV(socket, handle, buffers, cb)
               None
       },
       EmileError.IO.Unexpected(_)
@@ -810,7 +843,7 @@ object Socket:
   private def submitWriteV(
     socket: StreamSocketState,
     handle: Ptr[Byte],
-    slices: Vector[Chunk.ArraySlice[Byte]],
+    slices: Vector[Slice],
     cb: Either[Throwable, Unit] => Unit
   ): Unit =
     if socket.sendFileActive || socket.outputShutdown then cb(Left(EmileError.IO.ConflictingOperation))
@@ -818,7 +851,8 @@ object Socket:
       val nbufs = slices.size
       // uv_write copies the bufs array during the call, so it need not outlive uv_write; the stack
       // array stays valid across the synchronous writeVectored call, and the heap one is freed right
-      // after. The backing byte arrays must outlive the write and stay reachable through WriteState.
+      // after. The regions must outlive the write and stay reachable through WriteState - the Vector of
+      // Slices roots each array-backed anchor; a pointer-backed slice is the caller's to keep alive.
       if nbufs <= VectoredStackThreshold then writeVectored(socket, handle, slices, stackalloc[LibUV.Buf](nbufs), cb)
       else
         val bufs = allocBufs(nbufs)
@@ -829,7 +863,7 @@ object Socket:
   private def writeVectored(
     socket: StreamSocketState,
     handle: Ptr[Byte],
-    slices: Vector[Chunk.ArraySlice[Byte]],
+    slices: Vector[Slice],
     bufs: Ptr[LibUV.Buf],
     cb: Either[Throwable, Unit] => Unit
   ): Unit =
@@ -839,7 +873,7 @@ object Socket:
     while i < nbufs do
       val slice = slices(i)
       val buf = bufs + i
-      buf._1 = slice.values.atUnsafe(slice.offset)
+      buf._1 = slice.unsafePtr
       buf._2 = slice.length.toCSize
       i += 1
     CallbackBridge.storeReq(poller(socket), req, new WriteState(socket, poller(socket), cb, slices))
@@ -858,16 +892,16 @@ object Socket:
     if bufs == null then throw new OutOfMemoryError("emile: uv_buf_t array allocation failed")
     else bufs.asInstanceOf[Ptr[LibUV.Buf]]
 
-  private def tryWrite(socket: StreamSocketState, buf: Ptr[Byte], len: Int): EmIO[EmileError.IO, Int] =
+  private def tryWriteSlice(socket: StreamSocketState, slice: Slice): EmIO[EmileError.IO, Int] =
     EffIO.lift(
       Routing.onOwner(poller(socket)):
         LiveHandle.tryUse[Either[EmileError.IO, Int]](socket.live, Left(EmileError.IO.AlreadyClosed)): handle =>
           if socket.sendFileActive || socket.outputShutdown then Left(EmileError.IO.ConflictingOperation)
-          else if len <= 0 then Right(0)
+          else if slice.isEmpty then Right(0)
           else
             val bufs = stackalloc[LibUV.Buf]()
-            bufs._1 = buf
-            bufs._2 = len.toCSize
+            bufs._1 = slice.unsafePtr
+            bufs._2 = slice.length.toCSize
             val rc = LibUV.uv_try_write(handle, bufs, 1.toUInt)
             // uv_try_write returns the bytes accepted now; UV_EAGAIN means the buffer is full, so zero.
             if rc >= 0 then Right(rc)
@@ -937,7 +971,7 @@ object Socket:
       socket.sendFileActive = false
       CallbackBridge.releaseReq(poller, req)
       cleanupFsReq(req)
-      // A full send buffer surfaces as UV_EAGAIN; report it as 0 bytes sent (as tryWritePtr does),
+      // A full send buffer surfaces as UV_EAGAIN; report it as 0 bytes sent (as tryWrite does),
       // matching the best-effort "bytes actually sent" contract.
       if result >= 0L then cb(Right(result))
       else if result.toInt == ErrorCode.UV_EAGAIN then cb(Right(0L))

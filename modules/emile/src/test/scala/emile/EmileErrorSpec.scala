@@ -24,6 +24,8 @@ import scala.scalanative.unsafe.toCString
 import scala.scalanative.unsigned.*
 
 import boilerplate.effect.EffIO
+import boilerplate.effect.RetryPolicy
+import cats.data.NonEmptyList
 import cats.effect.IO
 import cats.effect.Resource
 import fs2.Chunk
@@ -222,6 +224,59 @@ final class EmileErrorSpec extends EmileSuite:
     EmileError.IO.Unexpected(new RuntimeException("boom")) match
       case EmileError.IO.Unexpected(cause) => assertEquals(cause.getMessage, "boom")
       case other => fail(s"expected Unexpected, got: $other")
+  }
+
+  test("HostConnect.transient classifies every connect and DNS arm") {
+    // Ephemeral conditions - a fresh attempt may succeed with no operator action.
+    assert(EmileError.Connect.ConnectionRefused.transient)
+    assert(EmileError.Connect.NetworkUnreachable.transient)
+    assert(EmileError.Connect.HostUnreachable.transient)
+    assert(EmileError.Connect.AddressNotAvailable.transient)
+    assert(EmileError.Connect.TimedOut.transient)
+    assert(EmileError.Connect.NotFound.transient)
+    assert(EmileError.Connect.TooManyOpenFiles.transient)
+    assert(EmileError.DNS.TemporaryFailure("host").transient)
+    // Durable conditions - retrying cannot help.
+    assert(!EmileError.Connect.PermissionDenied.transient)
+    assert(!EmileError.Connect.InvalidAddress("bad").transient)
+    assert(!EmileError.Connect.Unexpected(new RuntimeException("boom")).transient)
+    assert(!EmileError.DNS.UnknownHost("host").transient)
+    assert(!EmileError.DNS.System(ErrorCode(ErrorCode.UV_EAI_NONAME)).transient)
+    assert(!EmileError.DNS.Unexpected(new RuntimeException("boom")).transient)
+    // System(code): each transient libuv code classifies transient; any other code does not.
+    assert(EmileError.Connect.System(ErrorCode(ErrorCode.UV_EAGAIN)).transient)
+    assert(EmileError.Connect.System(ErrorCode(ErrorCode.UV_ECONNABORTED)).transient)
+    assert(EmileError.Connect.System(ErrorCode(ErrorCode.UV_EINTR)).transient)
+    assert(EmileError.Connect.System(ErrorCode(ErrorCode.UV_ENOBUFS)).transient)
+    assert(EmileError.Connect.System(ErrorCode(ErrorCode.UV_ENOMEM)).transient)
+    assert(EmileError.Connect.System(ErrorCode(ErrorCode.UV_ENETDOWN)).transient)
+    assert(!EmileError.Connect.System(ErrorCode(ErrorCode.UV_ECONNREFUSED)).transient)
+    // AllAddressesFailed derives from its member failures.
+    assert(EmileError.Connect.AllAddressesFailed(NonEmptyList.of(EmileError.Connect.ConnectionRefused)).transient)
+    assert(!EmileError.Connect.AllAddressesFailed(NonEmptyList.of(EmileError.Connect.PermissionDenied)).transient)
+    val mixed = NonEmptyList.of[EmileError.Connect](EmileError.Connect.PermissionDenied, EmileError.Connect.TimedOut)
+    assert(EmileError.Connect.AllAddressesFailed(mixed).transient)
+  }
+
+  test("a bounded retry reconnects once a listener appears on a refused port") {
+    val policy = RetryPolicy.fullJitter(20.millis).withMaxAttempts(200).withMaxDelay(100.millis)
+    def transientConnect(error: EmileError.Connect | EmileError.IO): Boolean = error match
+      case hc: EmileError.HostConnect => hc.transient
+      case _: EmileError.IO => false
+    // A free loopback address - bind then release - so a connect is refused until a listener reappears.
+    val freeAddress: IO[SocketAddress[IpAddress]] =
+      TCP.bind(anyLoopback).use(server => EffIO.suspend(server.address)).absolve
+    freeAddress.flatMap { addr =>
+      val listener: IO[Unit] =
+        IO.sleep(200.millis) *> TCP
+          .bind(addr)
+          .widen[EmileError]
+          .use(server => server.accepted.head.evalMap(_.use(_ => EffIO.succeed(()))).compile.drain)
+          .absolve
+      val reconnect: IO[Unit] =
+        EffIO.retry(TCP.connect(addr).use(_ => EffIO.succeed(())), policy, retryOn = transientConnect).absolve
+      listener.background.use(_ => reconnect).timeout(20.seconds)
+    }
   }
 
   // Connects a client to `server` (the kernel completes the handshake off the listener backlog, so no
