@@ -26,18 +26,26 @@ It is **Native-first**: the public API is shaped for the Scala Native representa
 
 ## Modules
 
-| Module      | Artifact                        | Purpose                                                                                                            |
-|-------------|---------------------------------|--------------------------------------------------------------------------------------------------------------------|
-| `emile`     | `africa.shuwari::emile`     | Core library: bootstrap, TCP, IPC (Unix-domain sockets), DNS, timers, signals, files, filesystem watching, fd-polling, terminals, subprocesses. |
-| `emile-fs2` | `africa.shuwari::emile-fs2` | fs2-networking interop: `TCPSocket.asFs2` / `TCPServer.acceptFs2` adapters onto `fs2.io.net.Socket[IO]`. Optional. |
+| Module                  | Artifact                                | Purpose                                                                                                            |
+|-------------------------|-----------------------------------------|--------------------------------------------------------------------------------------------------------------------|
+| `emile`                 | `africa.shuwari::emile`                 | Core library: bootstrap, TCP, IPC (Unix-domain sockets), DNS, timers, signals, files, filesystem watching, fd-polling, terminals, subprocesses. |
+| `emile-fs2`             | `africa.shuwari::emile-fs2`             | fs2-networking interop: `TCPSocket.asFs2` / `TCPServer.acceptFs2` adapters onto `fs2.io.net.Socket[IO]`. Optional. |
+| `emile-compress`        | `africa.shuwari::emile-compress`        | Compression core: the `CompressError` typed-error root and the output-byte `Budget` bomb guard. |
+| `emile-compress-zlib`   | `africa.shuwari::emile-compress-zlib`   | DEFLATE / zlib / gzip and raw-deflate streaming over vendored zlib-ng (Zlib licence). Optional. |
+| `emile-compress-brotli` | `africa.shuwari::emile-compress-brotli` | Brotli streaming over vendored brotli (MIT licence). Optional. |
+| `emile-compress-zstd`   | `africa.shuwari::emile-compress-zstd`   | Zstandard streaming over vendored single-threaded zstd (BSD-3-Clause). Optional. |
 
 ```scala
 // build.sbt (sbt 2.x)
 libraryDependencies ++= List(
-  "africa.shuwari" %% "emile"     % "<version>",
-  "africa.shuwari" %% "emile-fs2" % "<version>",  // only if you need the fs2 adapter
+  "africa.shuwari" %% "emile"               % "<version>",
+  "africa.shuwari" %% "emile-fs2"           % "<version>",  // only if you need the fs2 adapter
+  "africa.shuwari" %% "emile-compress-zlib" % "<version>",  // only if you need compression
 )
 ```
+
+Each compression codec is a separate module so a consumer takes only the licence surface, vendored C, and binary size of
+the codecs it uses. See [Compression](#compression---the-emile-compress-family) for provisioning the vendored C.
 
 ## Public API
 
@@ -669,6 +677,95 @@ Counts are grouped by category - `accept`, `connect`, `read`, `write` - each wit
 canceled totals. `read` and `accept` are counted as they complete (a persistent read has no single in-flight
 operation), while `write` and `connect` also carry an outstanding count. Threadpool work (DNS and file I/O) has no
 `PollerMetrics` category and is not counted.
+
+## Compression - the `emile-compress` family
+
+Streaming compression over vendored C codecs - zlib-ng, brotli, and zstd - as fs2 pipes and stateful sessions.
+Compression is pure CPU work between byte streams: these modules depend on emile's stream and error vocabulary, never on
+the loop, so they compose anywhere an `EmStream` does. The core `emile-compress` module carries the shared
+`CompressError` and `Budget`; each codec lives in its own module (above) with its own vendored C and licence.
+
+### Two levels
+
+**Level 1 - pipes** cover the dominant case: compress or decompress a whole byte stream. `compress` cannot fail
+operationally, so it carries a `Nothing` channel; `decompress` carries `CompressError`.
+
+```scala
+import emile.*
+import emile.compress.*
+import emile.compress.zlib.*
+
+val gzipped: EmStream[Nothing, Byte] =
+  source.through(Deflate.compress(DeflateParams(Framing.Gzip)))
+
+val restored: EmStream[CompressError, Byte] =
+  gzipped.through(Inflate.decompress(InflateParams(Framing.Gzip, Budget.bytes(64L * 1024 * 1024))))
+```
+
+Brotli and zstd expose the same shape as `Encoder.compress` / `Decoder.decompress` in their own packages.
+
+**Level 2 - sessions** are `Resource`-managed incremental contexts over the C state objects, for bespoke framing. They
+take a `Slice` in and return the output as a `Chunk`, with an explicit `flush` and `reset`. This is the substrate for
+RFC 7692 WebSocket permessage-deflate: raw DEFLATE, a byte-boundary flush, and a per-message window reset.
+
+```scala
+Deflate.session(DeflateParams(Framing.raw(15))).use: session =>
+  for
+    body <- session.update(Slice.of(message))
+    tail <- session.flush   // the block ends with the 00 00 ff ff RFC 7692 strips
+    _    <- session.reset   // empty the window for the next message (no_context_takeover)
+  yield body ++ tail
+```
+
+### Parameters and framing
+
+Parameters are values with named presets, never defaults baked into a signature. DEFLATE selects its envelope with
+`Framing`: `Zlib` (RFC 1950), `Gzip` (RFC 1952), or `Raw(windowBits)` (RFC 1951, headerless, `windowBits` 8..15 - the
+permessage-deflate negotiation range; zlib-ng promotes a request for 8 to a 9-bit window). Brotli offers
+`BrotliParams.default` (quality 5, tuned for a streaming response path) and `BrotliParams.maximum` (quality 11, the
+library's slow maximum-effort default). zstd's `ZstdParams.default` is level 3.
+
+### The decompression-bomb guard
+
+No compressed format carries a trustworthy in-band decompressed size, so decompression is guarded by an **output-byte
+budget** on the streaming loop. Every decompression parameter value therefore *requires* a `Budget`:
+
+```scala
+Budget.bytes(64L * 1024 * 1024)   // abort past 64 MiB with CompressError.BudgetExceeded
+Budget.unlimited                  // an explicit opt-out, never a default
+```
+
+zstd adds a second line: `ZstdDecodeParams` carries a `windowLogMax` (default 27, a 128 MiB window ceiling), and the
+decoder refuses a frame that declares a larger window with `CompressError.Malformed` before allocating for it. Brotli's
+large-window acceptance is opt-in on `BrotliDecodeParams`.
+
+### Offloading
+
+A codec session holds mutable native state; drive one from a single fibre. Per-chunk compression is tens of
+microseconds, so the pipes never offload internally - that would tax the common case. When a payload is large enough to
+be worth a hand-off, compose `.offload` around the compressing effect yourself, per the boundary in
+[Offloading CPU-bound work](#offloading-cpu-bound-work).
+
+### Provisioning a codec's vendored C
+
+A codec module publishes a bare native-library requirement (`z-ng`, `brotli`, or `zstd`) in its descriptor; its C is
+shipped as source, and your build provisions it once. With **sbt-snx**, vendor it from source at the release tag the
+module is verified against - zlib-ng `2.3.3`, brotli `v1.2.0`, zstd `v1.5.7` - or rebind the name to a matching system
+install:
+
+```scala
+import snx.sbt.SNXImports.*
+
+SNX.libraries += NativeLibrary(
+  "z-ng",
+  Vendored
+    .git("https://github.com/zlib-ng/zlib-ng.git", "2.3.3")
+    .cmake(Seq.empty, { case _ => Seq("-DZLIB_COMPAT=OFF", "-DZLIB_ENABLE_TESTS=OFF", "-DZLIBNG_ENABLE_TESTS=OFF", "-DWITH_GTEST=OFF") })
+)
+```
+
+Vendoring the C means the codec's own licence (Zlib, MIT, or BSD-3-Clause) applies to your binary alongside emile's
+Apache-2.0. With the **official sbt-scala-native plugin**, build the archive yourself and add it to `nativeConfig`.
 
 ## fs2 interop - the `emile-fs2` module
 

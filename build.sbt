@@ -15,7 +15,6 @@ scmInfo := Some(
   )
 )
 
-// Shuwari org POM defaults: organizationName, organizationHomepage, developers, versionScheme.
 Shuwari.organisationSettings
 
 val emile =
@@ -62,11 +61,89 @@ val `emile-stress` =
     .settings(libraryDependencies += Dependencies.`munit-cats-effect` % Test)
     .settings(nativeSettings)
 
+val `emile-compress` =
+  project
+    .in(file("modules/emile-compress"))
+    .enablePlugins(SNXPlugin, EmileNativeBuild)
+    .dependsOn(emile)
+    .settings(description := "Streaming-compression core for emile: the CompressError DNA, the Budget bomb guard, and shared value types.")
+    .settings(commonSettings)
+    .settings(publishSettings)
+    .settings(libraryDependencies += Dependencies.`munit` % Test)
+    .settings(libraryDependencies += Dependencies.`munit-cats-effect` % Test)
+    .settings(compressNativeSettings)
+
+val `emile-compress-zlib` =
+  project
+    .in(file("modules/emile-compress-zlib"))
+    .enablePlugins(SNXPlugin, EmileNativeBuild)
+    .dependsOn(`emile-compress`)
+    .settings(description := "DEFLATE/zlib/gzip and raw-deflate streaming for emile, over vendored zlib-ng (Zlib licence).")
+    .settings(commonSettings)
+    .settings(publishSettings)
+    .settings(libraryDependencies += Dependencies.`munit` % Test)
+    .settings(libraryDependencies += Dependencies.`munit-cats-effect` % Test)
+    .settings(compressNativeSettings)
+    // Export the bare `z-ng` requirement in the NIR descriptor; provision the vendored build for our tests.
+    .settings(SNX.libraries += NativeLibrary("z-ng"))
+    .settings(SNX.libraries += EmileCompressNative.zlibNg % Test)
+
+val `emile-compress-brotli` =
+  project
+    .in(file("modules/emile-compress-brotli"))
+    .enablePlugins(SNXPlugin, EmileNativeBuild)
+    .dependsOn(`emile-compress`)
+    .settings(description := "Brotli streaming compression for emile, over vendored brotli (MIT licence).")
+    .settings(commonSettings)
+    .settings(publishSettings)
+    .settings(libraryDependencies += Dependencies.`munit` % Test)
+    .settings(libraryDependencies += Dependencies.`munit-cats-effect` % Test)
+    .settings(compressNativeSettings)
+    .settings(SNX.libraries += NativeLibrary("brotli"))
+    .settings(SNX.libraries += EmileCompressNative.brotli % Test)
+
+val `emile-compress-zstd` =
+  project
+    .in(file("modules/emile-compress-zstd"))
+    .enablePlugins(SNXPlugin, EmileNativeBuild)
+    .dependsOn(`emile-compress`)
+    .settings(description := "Zstandard streaming compression for emile, over vendored single-threaded zstd (BSD-3-Clause).")
+    .settings(commonSettings)
+    .settings(publishSettings)
+    .settings(libraryDependencies += Dependencies.`munit` % Test)
+    .settings(libraryDependencies += Dependencies.`munit-cats-effect` % Test)
+    .settings(compressNativeSettings)
+    .settings(SNX.libraries += NativeLibrary("zstd"))
+    .settings(SNX.libraries += EmileCompressNative.zstd % Test)
+
+val `emile-compress-tests` =
+  project
+    .in(file("modules/emile-compress-tests"))
+    .enablePlugins(SNXPlugin, EmileNativeBuild)
+    .dependsOn(`emile-compress-zlib`, `emile-compress-brotli`, `emile-compress-zstd`)
+    .settings(description := "Cross-codec co-link and integration suite for the emile-compress family (off-aggregate publish).")
+    .settings(commonSettings)
+    .settings(publish / skip := true)
+    .settings(libraryDependencies += Dependencies.`munit` % Test)
+    .settings(libraryDependencies += Dependencies.`munit-cats-effect` % Test)
+    .settings(compressNativeSettings)
+    .settings(SNX.libraries += EmileCompressNative.zlibNg % Test)
+    .settings(SNX.libraries += EmileCompressNative.brotli % Test)
+    .settings(SNX.libraries += EmileCompressNative.zstd % Test)
+
 val `emile-root` =
   project
     .in(file("."))
     .settings(publish / skip := true)
-    .aggregate(emile, `emile-fs2`)
+    .aggregate(
+      emile,
+      `emile-fs2`,
+      `emile-compress`,
+      `emile-compress-zlib`,
+      `emile-compress-brotli`,
+      `emile-compress-zstd`,
+      `emile-compress-tests`
+    )
 
 def commonSettings: Seq[Setting[?]] = Seq(
   // sbt-shuwari's ScalacOptions already carry almost all of emile's mandated set; add the two it omits, and
@@ -95,6 +172,15 @@ def nativeSettings: Seq[Setting[?]] = Seq(
   // -no-pie defensively for us until the non-PIC relocation source issue is resolved.
   SNX.modifiers += Modifier.platform { case Linux(_, _) => _.linkOptions("-no-pie") },
   // A fully-static musl test binary when EMILE_STATIC_LINK is set - links the toolchain's static libuv archive.
+  Test / SNX.modifiers += Modifier.platform { case Linux(_, Musl) if staticTestLink.value => _.linkOptions("-static") }
+)
+
+// Native link settings shared by the compression modules. libuv and multithreading requirements
+// travel from emile through the NIR descriptor, so only the local link tweaks are restated here;
+// each codec module adds its own vendored `SNX.libraries` provisioning.
+def compressNativeSettings: Seq[Setting[?]] = Seq(
+  SNX.flags := { case Linux(_, _) => Flags.multithreaded },
+  SNX.modifiers += Modifier.platform { case Linux(_, _) => _.linkOptions("-no-pie") },
   Test / SNX.modifiers += Modifier.platform { case Linux(_, Musl) if staticTestLink.value => _.linkOptions("-static") }
 )
 
