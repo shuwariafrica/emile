@@ -32,12 +32,18 @@ trait EmileIOApp extends IOApp:
   /** The libuv loop tuning applied to every worker. Override to change it. */
   def loopConfig: LoopConfig = LoopConfig.default
 
+  /** The size of the offload lane - the bounded compute pool the `offload` combinator shifts
+    * CPU-heavy work onto. Defaults to one thread per available processor; override to change it.
+    */
+  def offloadParallelism: Int = LibUVPollingSystem.defaultOffloadParallelism
+
   /** The application body, in the typed-error effect. */
   def runEff(args: List[String]): EmIO[EmileError, ExitCode]
 
   final override def run(args: List[String]): IO[ExitCode] = runEff(args).absolve
 
-  final override protected def pollingSystem: PollingSystem = LibUVPollingSystem(loopConfig)
+  final override protected def pollingSystem: PollingSystem = LibUVPollingSystem(loopConfig, offloadParallelism)
+end EmileIOApp
 
 /** Companion of [[EmileIOApp]]; holds the argument-free [[EmileIOApp.Simple Simple]] variant. */
 object EmileIOApp:
@@ -50,12 +56,18 @@ object EmileIOApp:
     /** The libuv loop tuning applied to every worker. Override to change it. */
     def loopConfig: LoopConfig = LoopConfig.default
 
+    /** The size of the offload lane - the bounded compute pool the `offload` combinator shifts
+      * CPU-heavy work onto. Defaults to one thread per available processor; override to change it.
+      */
+    def offloadParallelism: Int = LibUVPollingSystem.defaultOffloadParallelism
+
     /** The application body, in the typed-error effect. */
     def runEff: EmIO[EmileError, Unit]
 
     final override def run: IO[Unit] = runEff.absolve
 
-    final override protected def pollingSystem: PollingSystem = LibUVPollingSystem(loopConfig)
+    final override protected def pollingSystem: PollingSystem = LibUVPollingSystem(loopConfig, offloadParallelism)
+  end Simple
 
 end EmileIOApp
 
@@ -76,11 +88,21 @@ object Emile:
   def runtime(config: LoopConfig): Resource[IO, IORuntime] =
     Resource.make(IO.delay(unsafeRuntime(config)))(rt => IO.delay(rt.shutdown()))
 
+  /** A `Resource` yielding an `IORuntime` on the libuv polling system tuned by `config`, with an
+    * offload lane of `offloadParallelism` threads; the runtime is shut down when the resource is
+    * released.
+    */
+  def runtime(config: LoopConfig, offloadParallelism: Int): Resource[IO, IORuntime] =
+    Resource.make(IO.delay(unsafeRuntime(config, offloadParallelism)))(rt => IO.delay(rt.shutdown()))
+
   /** Builds a libuv `IORuntime` whose shutdown the caller owns. The [[runtime]] resources and the
     * synchronous [[runEff]] runners are layered on this.
     */
   private[emile] def unsafeRuntime(config: LoopConfig): IORuntime =
-    IORuntimeBuilder().setPollingSystem(LibUVPollingSystem(config)).build()
+    unsafeRuntime(config, LibUVPollingSystem.defaultOffloadParallelism)
+
+  private[emile] def unsafeRuntime(config: LoopConfig, offloadParallelism: Int): IORuntime =
+    IORuntimeBuilder().setPollingSystem(LibUVPollingSystem(config, offloadParallelism)).build()
 
   /** Run a typed-error effect to completion on a fresh libuv `IORuntime` with the default
     * [[LoopConfig]] and return its typed result, shutting the runtime down afterwards - for driving

@@ -73,3 +73,14 @@ extension [E <: Throwable, I, O](pipe: EmPipe[E, I, O])
     // E is absent from the representation, so widening the invariant Pipe is a runtime identity rather
     // than a structural transform.
     pipe.asInstanceOf[EmPipe[E2, I, O]] // scalafix:ok DisableSyntax.asInstanceOf
+
+/** Shifts a CPU-heavy effect onto the runtime's bounded offload lane, freeing the loop worker to
+  * keep servicing I/O while the work runs; the continuation returns to the runtime and the typed
+  * error channel is preserved. Reserve it for CPU-bound steps - asymmetric crypto, key derivation,
+  * large-payload codecs - as blocking syscalls belong on `IO.blocking` and DNS and file I/O already
+  * run on libuv's threadpool. Raises `EmileError.Runtime.MissingLibUVPollingSystem` as a defect
+  * when the runtime carries no libuv polling system.
+  */
+extension [E <: Throwable, A](eff: EmIO[E, A])
+  def offload: EmIO[E, A] =
+    EffIO.liftF(LibUVPollingSystem.currentOffload.flatMap(lane => eff.absolve.evalOn(lane)))

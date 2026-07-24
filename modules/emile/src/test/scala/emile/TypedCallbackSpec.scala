@@ -17,6 +17,7 @@ package emile
 
 import scala.concurrent.duration.*
 
+import boilerplate.Slice
 import boilerplate.effect.EffIO
 import cats.effect.IO
 import fs2.Chunk
@@ -30,10 +31,8 @@ enum AppError extends Exception derives CanEqual:
   case Rejected
   case Malformed(at: Int)
 
-/** Covers the callback surface carrying an application's own error: a callback failure surfaces on
-  * the union channel `EmileError.IO | AppError` as the `AppError` arm, keeping emile's own errors
-  * on the `EmileError.IO` arm.
-  */
+// The callback surface carrying an application's own error, which surfaces on the union channel
+// EmileError.IO | AppError as the AppError arm while emile's own errors stay on the IO arm.
 final class TypedCallbackSpec extends EmileSuite:
 
   private val anyLoopback: SocketAddress[IpAddress] =
@@ -68,11 +67,11 @@ final class TypedCallbackSpec extends EmileSuite:
   }
 
   test("consume surfaces the application's own error on the union channel") {
-    runReading(socket => socket.consume((_, _) => Left(AppError.Malformed(1))).either)(AppError.Malformed(1))
+    runReading(socket => socket.consume((_: Slice) => Left(AppError.Malformed(1))).either)(AppError.Malformed(1))
   }
 
-  test("readPtr threads the application error from its callback onto the union channel") {
-    runReading(socket => socket.readPtr((_, _) => EffIO.fail(AppError.Rejected)).either.map(_.map(_ => ())))(AppError.Rejected)
+  test("the borrowed read threads the application error from its callback onto the union channel") {
+    runReading(socket => socket.read((_: Slice) => EffIO.fail(AppError.Rejected)).either.map(_.map(_ => ())))(AppError.Rejected)
   }
 
   // Serves one chunk from the peer, then runs `read` on the client and asserts the expected union error.

@@ -86,25 +86,47 @@ TCP.connect(host"example.com", port"443").use(socket => ???)
 
 A connected socket offers five read methods across two axes - one-shot vs persistent, copying vs zero-copy:
 
-| Method     | Mode       | Buffer        | Typical use |
+| Method           | Mode       | Buffer                 | Typical use |
 |---|---|---|---|
-| `read`     | one-shot   | owned `Chunk` | request/response framing |
-| `readN`    | one-shot   | owned `Chunk` | fixed-size header reads |
-| `readPtr`  | one-shot   | zero-copy view | a single zero-copy read |
-| `reads`    | persistent | owned `Chunk` (stream) | TLS handshakes, websockets, line protocols |
-| `consume`  | persistent | zero-copy view | feeding a synchronous native parser or codec |
+| `read(maxBytes)` | one-shot   | owned `Chunk`          | request/response framing |
+| `readN`          | one-shot   | owned `Chunk`          | fixed-size header reads |
+| `read(f)`        | one-shot   | borrowed `Slice`       | a single zero-copy read |
+| `reads`          | persistent | owned `Chunk` (stream) | TLS handshakes, websockets, line protocols |
+| `consume`        | persistent | borrowed `Slice`       | feeding a synchronous native parser or codec |
 
 The read modes share one per-socket buffer, so a socket has a single reader: starting a read while another is in
 flight fails fast with `EmileError.IO.ConflictingOperation`. Reading and writing concurrently is fine - they are
 independent directions.
 
-Writes mirror the reads: `write(chunk: Chunk[Byte])`, `write(chunks: Seq[Chunk[Byte]])` for one ordered gathering
-write, `writes: Pipe[..., Byte, Nothing]`, `writePtr(buf, len)` for an already-native buffer, `tryWritePtr(buf, len)`
-for a synchronous best-effort write, and `sendFile(file: OpenFile, offset, length)` for a kernel-to-socket transfer
-(see [OpenFile](#openfile)). Half-closes are `endOfInput` (send-only) and `endOfOutput` (`uv_shutdown`-backed
-receive-only); `closeReset` (TCP only) aborts the connection with a RST rather than a graceful FIN, discarding any
-queued output. Concurrent writes from different fibres are safe but their relative order is unspecified; batch them
-into one `write(chunks)` or use a single writer where order matters.
+Writes mirror the reads: `write(chunk: Chunk[Byte])` and `write(chunks: Seq[Chunk[Byte]])` (one ordered gathering
+write), `write(slice: Slice)` and `write(slices: Seq[Slice])` for a zero-copy write over borrowed regions,
+`writes: Pipe[..., Byte, Nothing]`, `tryWrite(slice: Slice)` for a synchronous best-effort write, and
+`sendFile(file: OpenFile, offset, length)` for a kernel-to-socket transfer (see [OpenFile](#openfile)). Half-closes
+are `endOfInput` (send-only) and `endOfOutput` (`uv_shutdown`-backed receive-only); `closeReset` (TCP only) aborts the
+connection with a RST rather than a graceful FIN, discarding any queued output. Concurrent writes from different fibres
+are safe but their relative order is unspecified; batch them into one `write(chunks)` or use a single writer where
+order matters.
+
+A `write(slice)` borrows its region until the effect completes, so a reusable write scratch is a codec-owned
+`Array[Byte]` framed as a `Slice` per fill, its completion sequenced before the next fill; a pipelined pair - one
+buffer filling while another is in flight - is simply two arrays:
+
+```scala
+import boilerplate.Slice
+
+// One codec-owned buffer, reused across writes; a pipelined pair is simply two arrays.
+val scratch = new Array[Byte](4096)
+
+def sendFramed(socket: TCPSocket, first: Array[Byte], second: Array[Byte]): EmIO[EmileError.IO, Unit] =
+  for
+    _ <- EffIO.suspend(System.arraycopy(first, 0, scratch, 0, first.length))
+    _ <- socket.write(Slice.of(scratch, 0, first.length))                     // borrows scratch until it completes
+    _ <- EffIO.suspend(System.arraycopy(second, 0, scratch, 0, second.length)) // safe: the prior write has completed
+    _ <- socket.write(Slice.of(scratch, 0, second.length))
+  yield ()
+```
+
+`Slice.of` bounds-checks each frame, and the non-moving GC keeps `scratch` valid under the borrow.
 
 `socket.onLoop` runs a synchronous step on the socket's owning loop thread - where thread-unsafe C state, such as a
 stateful native protocol codec, must live, since that is the one thread driving the socket's I/O. Keep it short and
@@ -313,6 +335,32 @@ substrate the typed-error channel already rides:
 - **Rate limiting and batching** - any fs2 `Stream` combinator (`metered`, `groupWithin`, ...) over `accepted` or
   `reads`.
 
+### Reconnecting
+
+A connect failure is `EmileError.HostConnect | EmileError.IO` (or `EmileError.Connect | EmileError.IO` for the address
+overload). `hostConnect.transient` says whether a fresh attempt might succeed with no operator action - a refused or
+unreachable peer, ephemeral-port exhaustion, fd pressure, a resolver's temporary failure. A connect retry is safe by
+construction - a fresh attempt has no side effect beyond the attempt - so it composes with a bounded, jittered policy
+at the effect level:
+
+```scala
+import boilerplate.effect.{EffIO, RetryPolicy}
+import scala.concurrent.duration.*
+
+val policy = RetryPolicy.fullJitter(20.millis).withMaxAttempts(10).withMaxDelay(2.seconds)
+
+// A connect-class failure may be worth retrying; a post-connect option failure (the IO arm) is not.
+def transientConnect(e: EmileError.Connect | EmileError.IO): Boolean = e match
+  case hc: EmileError.HostConnect => hc.transient
+  case _: EmileError.IO           => false
+
+val connected: EmIO[EmileError.Connect | EmileError.IO, Unit] =
+  EffIO.retry(TCP.connect(addr).use(handle), policy, retryOn = transientConnect)
+```
+
+Mid-stream `EmileError.IO` failures carry no `transient` predicate: whether an in-flight request may be retried turns
+on idempotency a boolean cannot express, so stream-level retry belongs at the request or pool layer, not on the error.
+
 ## Typed errors as values
 
 emile's effect alias is `EmIO[+E <: Throwable, +A] = boilerplate.effect.EffIO[E, A]`, covariant in both `E` and `A`.
@@ -353,9 +401,9 @@ The companion stream and resource aliases follow the same shape:
 
 ### Bringing your own error type
 
-`readPtr`, `consume`, `onLoop`, and `serve` take a callback that fails with an error of your choosing - any `Throwable`,
-so an ADT extending `Exception`. emile keeps that error and its own on the union channel `EmileError.IO | E`, which you
-match arm by arm and which stays `.absolve`-able throughout:
+The borrowed `read`, `consume`, `onLoop`, and `serve` take a callback that fails with an error of your choosing - any
+`Throwable`, so an ADT extending `Exception`. emile keeps that error and its own on the union channel
+`EmileError.IO | E`, which you match arm by arm and which stays `.absolve`-able throughout:
 
 ```scala
 enum AppError extends Exception:
@@ -363,7 +411,7 @@ enum AppError extends Exception:
   case Malformed(at: Int)
 
 val consumed: EmIO[EmileError.IO | AppError, Unit] =
-  socket.consume((ptr, len) => if len > 0 then Right(()) else Left(AppError.Rejected))
+  socket.consume(slice => if slice.length > 0 then Right(()) else Left(AppError.Rejected))
 
 consumed.either.map:
   case Left(io: EmileError.IO) => // a socket read failed
@@ -410,6 +458,29 @@ Separately, DNS resolution and all file I/O run on libuv's **process-wide** work
 loop, four threads by default. There is no per-loop or runtime knob: the pool is a single process resource, sized once
 from the `UV_THREADPOOL_SIZE` environment variable, read before the first such operation (maximum 1024). Raise it when
 concurrent name resolution or file I/O is the bottleneck.
+
+## Offloading CPU-bound work
+
+CPU-heavy work run inline on a loop worker stalls that worker's I/O until it finishes. `eff.offload` shifts such an
+effect onto the runtime's **offload lane** - a bounded compute pool, one thread per processor by default - so the worker
+stays free to service I/O; the continuation returns to the runtime and the typed-error channel is preserved.
+
+```scala
+val digest: EmIO[EmileError.IO, Array[Byte]] = expensiveHash(payload).offload
+```
+
+Reserve it for genuinely CPU-bound steps. The boundary between the ways to move work off a loop worker:
+
+| Work                                                                        | Where |
+|-----------------------------------------------------------------------------|-------|
+| Genuine blocking syscalls                                                   | `IO.blocking` - cats-effect's blocking pool |
+| DNS resolution and file I/O                                                 | libuv's own threadpool - automatic |
+| CPU-heavy compute - asymmetric crypto, KEM/KDF, password hashing, large codecs | `eff.offload` - the lane |
+| Per-record symmetric crypto                                                 | stays on the loop - too light to be worth a hand-off |
+
+Lane parallelism is a throughput knob, `offloadParallelism` (default: available processors), set through
+`EmileIOApp.offloadParallelism`, `Emile.runtime(config, offloadParallelism)`, or
+`LibUVPollingSystem(config, offloadParallelism)`.
 
 ## Observability
 

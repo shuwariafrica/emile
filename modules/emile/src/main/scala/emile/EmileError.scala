@@ -251,6 +251,44 @@ object EmileError:
 
       def unapply(u: Unexpected): Some[Throwable] = Some(u.cause)
   end Runtime
+
+  /** Whether a fresh connect attempt might succeed with no operator action - the failure is an
+    * ephemeral network or resource condition (a busy peer, an unreachable network, ephemeral-port
+    * exhaustion, fd pressure, a resolver's temporary failure), not a durable misconfiguration.
+    *
+    * Connect-scoped: it composes as `EffIO.retry(connect, policy, retryOn = _.transient)`, and a
+    * connect retry is safe by construction - a fresh attempt has no side effect beyond the attempt.
+    * Mid-stream [[EmileError.IO IO]] failures deliberately carry no such predicate: whether an
+    * in-flight request may be retried turns on idempotency a boolean cannot express, so
+    * stream-level retry belongs at the request or pool layer, not here.
+    */
+  extension (error: HostConnect)
+    def transient: Boolean = error match
+      case _: Connect.ConnectionRefused => true
+      case _: Connect.NetworkUnreachable => true
+      case _: Connect.HostUnreachable => true
+      case _: Connect.AddressNotAvailable => true
+      case _: Connect.TimedOut => true
+      case _: Connect.NotFound => true
+      case _: Connect.TooManyOpenFiles => true
+      case _: Connect.PermissionDenied => false
+      case _: Connect.InvalidAddress => false
+      case _: Connect.Unexpected => false
+      case Connect.AllAddressesFailed(failures) => failures.exists(_.transient)
+      case Connect.System(code) => transientConnectCode(code)
+      case _: DNS.TemporaryFailure => true
+      case _: DNS.UnknownHost => false
+      case _: DNS.System => false
+      case _: DNS.Unexpected => false
+  end extension
+
+  // A System-wrapped connect code is transient when it names an ephemeral network or resource
+  // condition that clears on a fresh attempt, not a durable one.
+  private def transientConnectCode(code: ErrorCode): Boolean = code.value match
+    case ErrorCode.UV_EAGAIN | ErrorCode.UV_ECONNABORTED | ErrorCode.UV_EINTR | ErrorCode.UV_ENOBUFS | ErrorCode.UV_ENOMEM |
+        ErrorCode.UV_ENETDOWN =>
+      true
+    case _ => false
 end EmileError
 
 /** Maps a libuv error code to a typed [[EmileError.Bind]], falling through to
