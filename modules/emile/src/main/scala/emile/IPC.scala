@@ -17,6 +17,8 @@ package emile
 
 import java.nio.charset.StandardCharsets
 import scala.scalanative.libc.stdlib
+import scala.scalanative.posix.sys.socket as posixSocket
+import scala.scalanative.posix.unistd
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
@@ -65,6 +67,13 @@ object IPC:
     Resource.makeFull[EffIO.Of[EmileError.Connect], IPCSocket](poll => poll(connectRaw(address)))(socket =>
       EffIO.liftF(Socket.release(socket))
     )
+
+  /** A connected pair of local stream sockets (`socketpair`) - a full-duplex in-process channel
+    * with no filesystem entry, for handing one end to a subprocess or splitting work across fibres.
+    * Both ends are on the acquiring worker's loop, and both are closed on release.
+    */
+  def pair: EmResource[EmileError.IO, (IPCSocket, IPCSocket)] =
+    Resource.make[EffIO.Of[EmileError.IO], (IPCSocket, IPCSocket)](acquirePair)(releasePair)
 
   // Shared (not built per bind): an IPC server carries no per-socket options, so finish is a no-op.
   private val ipcAcceptor: StreamServer.Acceptor =
@@ -320,6 +329,63 @@ object IPC:
     val req = stdlib.calloc(1.toCSize, LibUV.uv_req_size(LibUV.UV_CONNECT))
     if req == null then throw new OutOfMemoryError("emile: uv_connect_t allocation failed")
     else req
+
+  private def acquirePair: EmIO[EmileError.IO, (IPCSocket, IPCSocket)] =
+    EffIO.attempt(
+      for
+        poller <- LibUVPollingSystem.currentPoller
+        result <- Routing.onOwner(poller)(makePair(poller))
+        pair <- IO.fromEither(result)
+      yield pair,
+      EmileError.IO.Unexpected(_)
+    )
+
+  private def releasePair(pair: (IPCSocket, IPCSocket)): EmIO[EmileError.IO, Unit] =
+    EffIO.liftF(Socket.release(pair._1).flatMap(_ => Socket.release(pair._2)))
+
+  // socketpair, then adopt each fd into a uv_pipe_t; the pair's endpoints are unnamed. On a partial
+  // failure the already-adopted handle is uv_close'd and any un-adopted fd is closed directly.
+  private def makePair(poller: LibUVPoller): Either[EmileError.IO, (IPCSocket, IPCSocket)] =
+    val fds = stackalloc[CInt](2)
+    val rc = LibUV.uv_socketpair(posixSocket.SOCK_STREAM, 0, fds, 0, 0)
+    if rc != 0 then Left(IOMapping.fromCode(rc))
+    else
+      adopt(poller, fds(0)) match
+        case Left(code0) =>
+          unistd.close(fds(1)): Unit
+          Left(IOMapping.fromCode(code0))
+        case Right(handle0) =>
+          adopt(poller, fds(1)) match
+            case Left(code1) =>
+              LibUV.uv_close(handle0, freeHandleCb)
+              Left(IOMapping.fromCode(code1))
+            case Right(handle1) =>
+              Right(
+                (
+                  Socket.construct[SocketKind.IPC](handle0, poller, IPCAddress.Path(""), IPCAddress.Path("")),
+                  Socket.construct[SocketKind.IPC](handle1, poller, IPCAddress.Path(""), IPCAddress.Path(""))
+                )
+              )
+    end if
+  end makePair
+
+  // Adopts `fd` into a fresh uv_pipe_t. On failure the fd is closed (a successful adopt hands fd
+  // ownership to the handle, closed by uv_close); Left carries the libuv rc.
+  private def adopt(poller: LibUVPoller, fd: Int): Either[Int, Ptr[Byte]] =
+    val handle = stdlib.calloc(1.toCSize, LibUV.uv_handle_size(LibUV.UV_NAMED_PIPE))
+    if handle == null then throw new OutOfMemoryError("emile: uv_pipe_t allocation failed")
+    val initRc = LibUV.uv_pipe_init(poller.loop, handle, 0)
+    if initRc != 0 then
+      stdlib.free(handle)
+      unistd.close(fd): Unit
+      Left(initRc)
+    else
+      val openRc = LibUV.uv_pipe_open(handle, fd)
+      if openRc != 0 then
+        unistd.close(fd): Unit
+        LibUV.uv_close(handle, freeHandleCb)
+        Left(openRc)
+      else Right(handle)
 
   private val freeHandleCb: LibUV.CloseCB = (handle: Ptr[Byte]) => stdlib.free(handle)
 

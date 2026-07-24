@@ -20,6 +20,7 @@ import scala.scalanative.libc.stdlib
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
+import boilerplate.Slice
 import boilerplate.effect.EffIO
 import cats.effect.IO
 import cats.effect.Resource
@@ -34,22 +35,36 @@ import emile.unsafe.Routing
 
 final private class OpenFileState(val file: Int, val poller: LibUVPoller)
 
-/** A file open for reading, backed by a libuv `uv_file`. Acquired through [[OpenFile$ OpenFile]];
-  * the descriptor is closed when the resource releases.
+/** A file open through libuv, backed by a `uv_file` descriptor. Acquired through
+  * [[OpenFile$ OpenFile]]; the descriptor is closed when the resource releases. Whether it may be
+  * read, written, or both follows the [[OpenMode]] it was opened with.
   */
 opaque type OpenFile = OpenFileState
 
-/** Resource, accessors, and equality for [[OpenFile]]. Every file operation runs on libuv's
-  * process-wide worker threadpool - shared with [[DNS$ DNS]] resolution across every loop, four
-  * threads by default - so set `UV_THREADPOOL_SIZE` in the environment before startup when
-  * concurrent file I/O saturates it.
+/** Resource, read and write operations, metadata, and equality for [[OpenFile]]. Every file
+  * operation runs on libuv's process-wide worker threadpool - shared with [[DNS$ DNS]] resolution
+  * across every loop, four threads by default - so set `UV_THREADPOOL_SIZE` in the environment
+  * before startup when concurrent file I/O saturates it.
   */
 object OpenFile:
 
-  /** Opens `path` for reading. The descriptor is closed when the resource releases; while open the
-    * same file may serve repeated reads.
+  /** Opens `path` read-only; the file must already exist. The descriptor is closed when the
+    * resource releases, and while open the same file may serve repeated reads.
     */
   def open(path: Path): EmResource[EmileError.IO, OpenFile] =
+    open(path, LibUV.UV_FS_O_RDONLY, 0)
+
+  /** Opens `path` per `mode`, creating it with permission `0644` where the mode creates. */
+  def open(path: Path, mode: OpenMode): EmResource[EmileError.IO, OpenFile] =
+    open(path, OpenMode.flags(mode), DefaultCreatePermissions)
+
+  /** Opens `path` per `mode`, creating it with `permissions` (an octal mode, effective only when
+    * the mode creates the file).
+    */
+  def open(path: Path, mode: OpenMode, permissions: Int): EmResource[EmileError.IO, OpenFile] =
+    open(path, OpenMode.flags(mode), permissions)
+
+  private def open(path: Path, flags: Int, permissions: Int): EmResource[EmileError.IO, OpenFile] =
     Resource.makeFull[EffIO.Of[EmileError.IO], OpenFile] { poll =>
       EffIO
         .liftF(LibUVPollingSystem.currentPoller)
@@ -57,13 +72,17 @@ object OpenFile:
           // poll wraps only the open wait; the fd -> OpenFileState adoption is uncancelable, so an fd
           // delivered as cancellation lands is still adopted - and closed by the resource's release - and
           // never orphaned.
-          poll(EffIO.attempt(openFile(poller, path), EmileError.IO.Unexpected(_))).map(new OpenFileState(_, poller))
+          poll(EffIO.attempt(openFile(poller, path, flags, permissions), EmileError.IO.Unexpected(_)))
+            .map(new OpenFileState(_, poller))
     }(release)
 
   given CanEqual[OpenFile, OpenFile] = CanEqual.derived
 
   /** Read-chunk size for [[reads]]. */
   inline val DefaultReadSize = 65536
+
+  // The permission a two-argument create-mode open uses (0644 octal): owner read/write, others read.
+  private inline val DefaultCreatePermissions = 0x1a4
 
   extension (file: OpenFile)
     /** The file's size in bytes. */
@@ -80,6 +99,74 @@ object OpenFile:
     def reads: EmStream[EmileError.IO, Byte] =
       Stream.resource(readsResource(file)).flatMap(state => Stream.repeatEval(readsRead(state))).unNoneTerminate.unchunks
 
+    /** Writes every byte of `slice` at the current position, advancing it. The region is borrowed
+      * until the effect completes, so do not mutate it while the write is in flight; a reusable
+      * write scratch is an owned array framed as a [[boilerplate.Slice Slice]] per fill, its
+      * completion sequenced before the next fill. A short native write is completed by resubmitting
+      * the remainder, so a genuine error - never a partial write - surfaces.
+      */
+    def write(slice: Slice): EmIO[EmileError.IO, Unit] =
+      EffIO.attempt(writeAll(file, slice, -1L), EmileError.IO.Unexpected(_))
+
+    /** Writes every byte of `slice` at `offset` without moving the current position. Under an
+      * append mode the kernel ignores `offset` and the bytes still land at end of file. Borrowing
+      * and short-write handling are as for the current-position [[write]].
+      */
+    def write(slice: Slice, offset: Long): EmIO[EmileError.IO, Unit] =
+      EffIO.attempt(writeAll(file, slice, offset), EmileError.IO.Unexpected(_))
+
+    /** A sink writing every byte the source emits at the current position, chunk by chunk - the
+      * append-a-record shape for a file logger over `stream.through(file.writes)`.
+      */
+    def writes: EmPipe[EmileError.IO, Byte, Nothing] =
+      _.chunks.foreach(chunk => writeChunkAt(file, chunk))
+
+    /** Truncates or extends the file to `size` bytes (`ftruncate`); an extension reads back as
+      * zeros.
+      */
+    def truncate(size: Long): EmIO[EmileError.IO, Unit] =
+      fsUnit(file)(req => LibUV.uv_fs_ftruncate(file.poller.loop, req, file.file, size, fsDeliveryCb))
+
+    /** Flushes buffered data and metadata to the storage device (`fsync`). */
+    def sync: EmIO[EmileError.IO, Unit] =
+      fsUnit(file)(req => LibUV.uv_fs_fsync(file.poller.loop, req, file.file, fsDeliveryCb))
+
+    /** Flushes buffered data - but not size-unchanged metadata - to the storage device
+      * (`fdatasync`).
+      */
+    def datasync: EmIO[EmileError.IO, Unit] =
+      fsUnit(file)(req => LibUV.uv_fs_fdatasync(file.poller.loop, req, file.file, fsDeliveryCb))
+
+    /** The file's full [[FileStatus]] (`fstat`). */
+    def stat: EmIO[EmileError.IO, FileStatus] =
+      EffIO.attempt(
+        fsRequest(file, noBuffer)(req => LibUV.uv_fs_fstat(file.poller.loop, req, file.file, fsDeliveryCb))(statusResult),
+        EmileError.IO.Unexpected(_)
+      )
+
+    /** Sets the file's permission bits to `permissions` (an octal mode) via `fchmod`. */
+    def chmod(permissions: Int): EmIO[EmileError.IO, Unit] =
+      fsUnit(file)(req => LibUV.uv_fs_fchmod(file.poller.loop, req, file.file, permissions, fsDeliveryCb))
+
+    /** Sets the file's owner and group via `fchown`; either id may be `-1` to leave it unchanged. */
+    def chown(uid: Int, gid: Int): EmIO[EmileError.IO, Unit] =
+      fsUnit(file)(req => LibUV.uv_fs_fchown(file.poller.loop, req, file.file, uid.toUInt, gid.toUInt, fsDeliveryCb))
+
+    /** Sets the file's access and modification times via `futime`; each [[SetTime]] is set
+      * explicitly, to now, or left unchanged independently.
+      */
+    def setTimes(atime: SetTime, mtime: SetTime): EmIO[EmileError.IO, Unit] =
+      fsUnit(file)(req =>
+        LibUV.uv_fs_futime(file.poller.loop, req, file.file, SetTime.toDouble(atime), SetTime.toDouble(mtime), fsDeliveryCb)
+      )
+  end extension
+
+  // Adopts an already-open descriptor (from mkstemp) into an OpenFile on `poller`; closed through the
+  // shared release. The file supports the operations its underlying open flags allow.
+  private[emile] def fromDescriptor(poller: LibUVPoller, fd: Int): OpenFile = new OpenFileState(fd, poller)
+
+  private[emile] def close(file: OpenFile): IO[Unit] = closeFile(file)
+
   /** The underlying `uv_file` descriptor - for `uv_fs_sendfile`. */
   private[emile] def descriptor(file: OpenFile): Int = file.file
 
@@ -94,13 +181,13 @@ object OpenFile:
   final private class OpenRequest(val cb: Either[Throwable, Int] => Unit):
     var cancelled: Boolean = false // scalafix:ok DisableSyntax.var
 
-  // uv_fs_open for reading; the request result delivered by the callback is the uv_file descriptor.
-  private def openFile(poller: LibUVPoller, path: Path): IO[Int] =
+  // uv_fs_open; the request result delivered by the callback is the uv_file descriptor.
+  private def openFile(poller: LibUVPoller, path: Path, flags: Int, permissions: Int): IO[Int] =
     IO.async[Int]: cb =>
       Routing.onOwner(poller):
         val request = new OpenRequest(cb)
         val req = allocRequest()
-        val rc = startOpen(poller, req, path)
+        val rc = startOpen(poller, req, path, flags, permissions)
         if rc < 0 then
           failRequest(req, cb, rc)
           None
@@ -157,8 +244,8 @@ object OpenFile:
         else CallbackBridge.storeReq(file.poller, req, closeDeliver(file.poller, cb))
         None
 
-  private def startOpen(poller: LibUVPoller, req: Ptr[Byte], path: Path): Int =
-    Zone(LibUV.uv_fs_open(poller.loop, req, toCString(path.toString), LibUV.UV_FS_O_RDONLY, 0, fsCb))
+  private def startOpen(poller: LibUVPoller, req: Ptr[Byte], path: Path, flags: Int, permissions: Int): Int =
+    Zone(LibUV.uv_fs_open(poller.loop, req, toCString(path.toString), flags, permissions, fsCb))
 
   // Synchronous uv_fs_* failure: it occurs before storeReq, so there is no anchor to release - just
   // clean up the request and fail the callback.
@@ -278,6 +365,84 @@ object OpenFile:
       CallbackBridge.releaseReq(poller, req)
       cleanupRequest(req)
       cb(Right(()))
+
+  // Loop-to-completion write: uv_fs_write can report a short count when a late error is swallowed
+  // (never a benign short write - it retries EINTR and short kernel writes internally), so the
+  // remainder is resubmitted until complete; the swallowed error then surfaces on the resubmit, whose
+  // fresh attempt returns it. A positioned write advances its offset by the bytes written; a
+  // current-position write keeps offset -1.
+  private def writeAll(file: OpenFile, slice: Slice, offset: Long): IO[Unit] =
+    if slice.isEmpty then IO.unit
+    else
+      writeOnce(file, slice, offset).flatMap: written =>
+        if written >= slice.length then IO.unit
+        else writeAll(file, slice.drop(written), if offset < 0L then -1L else offset + written)
+
+  // One uv_fs_write; the slice is the keep-alive, holding its backing region reachable for the whole
+  // in-flight write. The stack bufs array is copied by uv_fs_write during the call, so it need not
+  // outlive it.
+  private def writeOnce(file: OpenFile, slice: Slice, offset: Long): IO[Int] =
+    fsRequest(file, slice) { req =>
+      val bufs = stackalloc[LibUV.Buf]()
+      bufs._1 = slice.unsafePtr
+      bufs._2 = slice.length.toCSize
+      LibUV.uv_fs_write(file.poller.loop, req, file.file, bufs, 1.toUInt, offset, fsDeliveryCb)
+    }(intResult)
+
+  // Each chunk's backing array framed as a Slice for the shared write-to-completion path.
+  private def writeChunkAt(file: OpenFile, chunk: Chunk[Byte]): EmIO[EmileError.IO, Unit] =
+    if chunk.isEmpty then EffIO.succeed(())
+    else
+      val arr = chunk.toArraySlice
+      EffIO.attempt(writeAll(file, Slice.of(arr.values, arr.offset, arr.length), -1L), EmileError.IO.Unexpected(_))
+
+  // A result-0-or-typed-error fs op on `file`'s loop.
+  private def fsUnit(file: OpenFile)(submit: Ptr[Byte] => Int): EmIO[EmileError.IO, Unit] =
+    EffIO.attempt(fsRequest(file, noBuffer)(submit)(unitResult), EmileError.IO.Unexpected(_))
+
+  // Submit an fs op on `file`'s loop and deliver its typed result. `submit(req)` issues the uv_fs_*
+  // call (returning its rc); `interpret(req)` reads the outcome from the completed request, before the
+  // cleanup that frees it. `keepAlive` is held reachable (via the anchored delivery) until the
+  // callback fires - the write buffer especially. Cancellation cancels a still-queued op; its callback
+  // then delivers UV_ECANCELED and reclaims the request like any other completion.
+  private def fsRequest[A](file: OpenFile, keepAlive: AnyRef)(submit: Ptr[Byte] => Int)(
+    interpret: Ptr[Byte] => Either[EmileError.IO, A]): IO[A] =
+    IO.async[A]: cb =>
+      Routing.onOwner(file.poller):
+        val req = allocRequest()
+        val rc = submit(req)
+        if rc < 0 then
+          failRequest(req, cb, rc)
+          None
+        else
+          val run: Ptr[Byte] => Unit = r =>
+            val outcome = interpret(r)
+            CallbackBridge.releaseReq(file.poller, r)
+            cleanupRequest(r)
+            cb(outcome)
+          CallbackBridge.storeReq(file.poller, req, new FsDelivery(run, keepAlive))
+          Some(Routing.onOwner(file.poller)(LibUV.uv_cancel(req): Unit))
+
+  // The anchored completion for an fsRequest: its delivery closure, plus the buffer the op borrows,
+  // both kept reachable while the request is outstanding.
+  final private class FsDelivery(val run: Ptr[Byte] => Unit, @scala.annotation.unused val keepAlive: AnyRef)
+
+  private val fsDeliveryCb: LibUV.FSCB = (req: Ptr[Byte]) => CallbackBridge.loadReq[FsDelivery](req).run(req)
+
+  // Keep-alive placeholder for ops that borrow no caller buffer.
+  private val noBuffer: AnyRef = new Object
+
+  private def unitResult(req: Ptr[Byte]): Either[EmileError.IO, Unit] =
+    val result = LibUV.uv_fs_get_result(req).toInt
+    if result < 0 then Left(IOMapping.fromCode(result)) else Right(())
+
+  private def intResult(req: Ptr[Byte]): Either[EmileError.IO, Int] =
+    val result = LibUV.uv_fs_get_result(req).toInt
+    if result < 0 then Left(IOMapping.fromCode(result)) else Right(result)
+
+  private def statusResult(req: Ptr[Byte]): Either[EmileError.IO, FileStatus] =
+    val result = LibUV.uv_fs_get_result(req).toInt
+    if result < 0 then Left(IOMapping.fromCode(result)) else Right(FileStatus.fromStat(LibUV.uv_fs_get_statbuf(req)))
 
   private def cleanupRequest(req: Ptr[Byte]): Unit =
     LibUV.uv_fs_req_cleanup(req)

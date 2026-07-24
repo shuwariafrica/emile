@@ -27,8 +27,35 @@ private[emile] object LibUV:
   /** `uv_buf_t`. */
   type Buf = CStruct2[Ptr[Byte], CSize]
 
-  /** The leading `uint64_t` fields of `uv_stat_t`; `_8` is `st_size`. */
-  type Stat = CStruct8[
+  /** `uv_timespec_t` - `long`-based seconds and nanoseconds (LP64 today, ILP32 width-sensitive). */
+  type Timespec = CStruct2[CLong, CLong]
+
+  /** `uv_stat_t`, all sixteen fields: twelve `uint64_t` (`_8` is `st_size`) then the atime, mtime,
+    * ctime, and birthtime [[Timespec]]s (`.at13`..`.at16`).
+    */
+  type Stat = CStruct16[
+    CUnsignedLongLong,
+    CUnsignedLongLong,
+    CUnsignedLongLong,
+    CUnsignedLongLong,
+    CUnsignedLongLong,
+    CUnsignedLongLong,
+    CUnsignedLongLong,
+    CUnsignedLongLong,
+    CUnsignedLongLong,
+    CUnsignedLongLong,
+    CUnsignedLongLong,
+    CUnsignedLongLong,
+    Timespec,
+    Timespec,
+    Timespec,
+    Timespec
+  ]
+
+  /** The leading eight `uint64_t` fields of `uv_statfs_t` (`f_type` .. `f_frsize`); the
+    * `f_spare[3]` tail is unread.
+    */
+  type Statfs = CStruct8[
     CUnsignedLongLong,
     CUnsignedLongLong,
     CUnsignedLongLong,
@@ -37,6 +64,28 @@ private[emile] object LibUV:
     CUnsignedLongLong,
     CUnsignedLongLong,
     CUnsignedLongLong
+  ]
+
+  /** `uv_dirent_t`: a strdup'd `name` (freed by `uv_fs_req_cleanup`) and a `uv_dirent_type_t`
+    * ordinal.
+    */
+  type Dirent = CStruct2[CString, CInt]
+
+  /** The prefix of `uv_dir_t` the readdir protocol writes: the caller-owned `dirents` array and its
+    * capacity `nentries`, both set before every `uv_fs_readdir`.
+    */
+  type Dir = CStruct2[Ptr[Dirent], CSize]
+
+  /** `uv_interface_address_t` (80 bytes): name, the 6-byte hardware address then its alignment pad,
+    * `is_internal`, and the address and netmask `sockaddr` unions (`.at5` / `.at6`).
+    */
+  type IfAddr = CStruct6[
+    Ptr[Byte],
+    CArray[Byte, Nat._6],
+    CShort,
+    CInt,
+    CArray[Byte, Nat.Digit2[Nat._2, Nat._8]],
+    CArray[Byte, Nat.Digit2[Nat._3, Nat._2]]
   ]
 
   type AllocCB = CFuncPtr3[Ptr[Byte], CSize, Ptr[Buf], Unit]
@@ -51,6 +100,8 @@ private[emile] object LibUV:
   type AsyncCB = CFuncPtr1[Ptr[Byte], Unit]
   type WalkCB = CFuncPtr2[Ptr[Byte], Ptr[Byte], Unit]
   type FSCB = CFuncPtr1[Ptr[Byte], Unit]
+  // uv_random_cb: (req, status, buf, buflen). The buf / buflen echo the fill target and are unused.
+  type RandomCB = CFuncPtr4[Ptr[Byte], CInt, Ptr[Byte], CSize, Unit]
   type GetAddrInfoCB = CFuncPtr3[Ptr[Byte], CInt, Ptr[Byte], Unit]
   type GetNameInfoCB = CFuncPtr4[Ptr[Byte], CInt, CString, CString, Unit]
   type SignalCB = CFuncPtr2[Ptr[Byte], CInt, Unit]
@@ -109,6 +160,7 @@ private[emile] object LibUV:
   inline val UV_FS = 6
   inline val UV_GETADDRINFO = 8
   inline val UV_GETNAMEINFO = 9
+  inline val UV_RANDOM = 10
 
   // uv_run_mode.
   inline val UV_RUN_ONCE = 1
@@ -136,8 +188,15 @@ private[emile] object LibUV:
   inline val UV_TCP_IPV6ONLY = 1
   inline val UV_TCP_REUSEPORT = 2
 
-  // uv_fs open flag.
+  // uv_fs open flag. The write / create O_* set is not fixed across platforms, so it is sourced from
+  // the posix layer at the call site (OpenMode.flags) rather than bound here; RDONLY is universally 0.
   inline val UV_FS_O_RDONLY = 0
+
+  // uv_fs_copyfile flags (libuv-fixed, not platform O_*): EXCL fails if the destination exists,
+  // FICLONE attempts a reflink with a byte-copy fallback, FICLONE_FORCE reflinks or errors.
+  inline val UV_FS_COPYFILE_EXCL = 0x1
+  inline val UV_FS_COPYFILE_FICLONE = 0x2
+  inline val UV_FS_COPYFILE_FICLONE_FORCE = 0x4
 
   // uv_stdio_flags. The direction flags are the child's perspective; UV_READABLE_PIPE means the child
   // reads (parent writes), UV_WRITABLE_PIPE the child writes (parent reads), both together duplex.
@@ -320,6 +379,104 @@ private[unsafe] object LibUVExtern:
   def uv_fs_req_cleanup(req: Ptr[Byte]): Unit = extern
   def uv_fs_get_result(req: Ptr[Byte]): CSSize = extern
   def uv_fs_get_statbuf(req: Ptr[Byte]): Ptr[LibUV.Stat] = extern
+  // req->ptr: the READLINK / REALPATH string or the STATFS struct (freed by uv_fs_req_cleanup, so read
+  // first); req->path: the MKDTEMP / MKSTEMP created path (always allocated, freed by cleanup).
+  def uv_fs_get_ptr(req: Ptr[Byte]): Ptr[Byte] = extern
+  def uv_fs_get_path(req: Ptr[Byte]): CString = extern
+
+  // A negative offset writes at (and advances) the current file position, a non-negative offset is a
+  // positioned write that does not move it; under O_APPEND the kernel ignores the offset. The bufs
+  // array is copied, but each buffer's memory must live until the callback fires. A short count can
+  // occur with a late error swallowed, so the caller resubmits the remainder to complete or surface it.
+  def uv_fs_write(
+    loop: Ptr[Byte],
+    req: Ptr[Byte],
+    file: CInt,
+    bufs: Ptr[LibUV.Buf],
+    nbufs: CUnsignedInt,
+    offset: CLongLong,
+    cb: LibUV.FSCB
+  ): CInt = extern
+  def uv_fs_ftruncate(loop: Ptr[Byte], req: Ptr[Byte], file: CInt, offset: CLongLong, cb: LibUV.FSCB): CInt = extern
+  def uv_fs_fsync(loop: Ptr[Byte], req: Ptr[Byte], file: CInt, cb: LibUV.FSCB): CInt = extern
+  def uv_fs_fdatasync(loop: Ptr[Byte], req: Ptr[Byte], file: CInt, cb: LibUV.FSCB): CInt = extern
+  def uv_fs_fchmod(loop: Ptr[Byte], req: Ptr[Byte], file: CInt, mode: CInt, cb: LibUV.FSCB): CInt = extern
+  def uv_fs_futime(loop: Ptr[Byte], req: Ptr[Byte], file: CInt, atime: CDouble, mtime: CDouble, cb: LibUV.FSCB): CInt = extern
+  def uv_fs_fchown(
+    loop: Ptr[Byte],
+    req: Ptr[Byte],
+    file: CInt,
+    uid: CUnsignedInt,
+    gid: CUnsignedInt,
+    cb: LibUV.FSCB
+  ): CInt = extern
+
+  def uv_fs_stat(loop: Ptr[Byte], req: Ptr[Byte], path: CString, cb: LibUV.FSCB): CInt = extern
+  def uv_fs_lstat(loop: Ptr[Byte], req: Ptr[Byte], path: CString, cb: LibUV.FSCB): CInt = extern
+  def uv_fs_statfs(loop: Ptr[Byte], req: Ptr[Byte], path: CString, cb: LibUV.FSCB): CInt = extern
+  def uv_fs_realpath(loop: Ptr[Byte], req: Ptr[Byte], path: CString, cb: LibUV.FSCB): CInt = extern
+  def uv_fs_access(loop: Ptr[Byte], req: Ptr[Byte], path: CString, mode: CInt, cb: LibUV.FSCB): CInt = extern
+  def uv_fs_chmod(loop: Ptr[Byte], req: Ptr[Byte], path: CString, mode: CInt, cb: LibUV.FSCB): CInt = extern
+  def uv_fs_utime(loop: Ptr[Byte], req: Ptr[Byte], path: CString, atime: CDouble, mtime: CDouble, cb: LibUV.FSCB): CInt = extern
+  def uv_fs_lutime(loop: Ptr[Byte], req: Ptr[Byte], path: CString, atime: CDouble, mtime: CDouble, cb: LibUV.FSCB): CInt =
+    extern
+  def uv_fs_chown(
+    loop: Ptr[Byte],
+    req: Ptr[Byte],
+    path: CString,
+    uid: CUnsignedInt,
+    gid: CUnsignedInt,
+    cb: LibUV.FSCB
+  ): CInt = extern
+  def uv_fs_lchown(
+    loop: Ptr[Byte],
+    req: Ptr[Byte],
+    path: CString,
+    uid: CUnsignedInt,
+    gid: CUnsignedInt,
+    cb: LibUV.FSCB
+  ): CInt = extern
+
+  def uv_fs_unlink(loop: Ptr[Byte], req: Ptr[Byte], path: CString, cb: LibUV.FSCB): CInt = extern
+  def uv_fs_rename(loop: Ptr[Byte], req: Ptr[Byte], path: CString, newPath: CString, cb: LibUV.FSCB): CInt = extern
+  def uv_fs_copyfile(loop: Ptr[Byte], req: Ptr[Byte], path: CString, newPath: CString, flags: CInt, cb: LibUV.FSCB): CInt =
+    extern
+  def uv_fs_link(loop: Ptr[Byte], req: Ptr[Byte], path: CString, newPath: CString, cb: LibUV.FSCB): CInt = extern
+  def uv_fs_symlink(loop: Ptr[Byte], req: Ptr[Byte], path: CString, newPath: CString, flags: CInt, cb: LibUV.FSCB): CInt =
+    extern
+  def uv_fs_readlink(loop: Ptr[Byte], req: Ptr[Byte], path: CString, cb: LibUV.FSCB): CInt = extern
+  def uv_fs_mkdir(loop: Ptr[Byte], req: Ptr[Byte], path: CString, mode: CInt, cb: LibUV.FSCB): CInt = extern
+  def uv_fs_rmdir(loop: Ptr[Byte], req: Ptr[Byte], path: CString, cb: LibUV.FSCB): CInt = extern
+  def uv_fs_mkdtemp(loop: Ptr[Byte], req: Ptr[Byte], tpl: CString, cb: LibUV.FSCB): CInt = extern
+  def uv_fs_mkstemp(loop: Ptr[Byte], req: Ptr[Byte], tpl: CString, cb: LibUV.FSCB): CInt = extern
+
+  // opendir delivers the uv_dir_t at req->ptr (NOT freed by cleanup - closedir frees it). readdir fills
+  // up to dir->nentries dirents (result is the count, 0 = end); its strdup'd names are freed by
+  // uv_fs_req_cleanup, which must run before the next readdir or closedir.
+  def uv_fs_opendir(loop: Ptr[Byte], req: Ptr[Byte], path: CString, cb: LibUV.FSCB): CInt = extern
+  def uv_fs_readdir(loop: Ptr[Byte], req: Ptr[Byte], dir: Ptr[Byte], cb: LibUV.FSCB): CInt = extern
+  def uv_fs_closedir(loop: Ptr[Byte], req: Ptr[Byte], dir: Ptr[Byte], cb: LibUV.FSCB): CInt = extern
+
+  // Fills buf with buflen cryptographically strong bytes from the system CSPRNG; async (cb != NULL)
+  // runs on the threadpool. flags must be 0. The buffer must live until the callback fires.
+  def uv_random(
+    loop: Ptr[Byte],
+    req: Ptr[Byte],
+    buf: Ptr[Byte],
+    buflen: CSize,
+    flags: CUnsignedInt,
+    cb: LibUV.RandomCB
+  ): CInt = extern
+
+  // One contiguous block holds the address array and the name strings; uv_free_interface_addresses
+  // frees it in a single call (count ignored on Unix).
+  def uv_interface_addresses(addresses: Ptr[Ptr[LibUV.IfAddr]], count: Ptr[CInt]): CInt = extern
+  def uv_free_interface_addresses(addresses: Ptr[LibUV.IfAddr], count: CInt): Unit = extern
+
+  // Creates a connected AF_UNIX pair of the given socket type; CLOEXEC is always applied. Each fd is
+  // then adopted into a uv_pipe_t (a Unix-domain stream) with uv_pipe_open.
+  def uv_socketpair(`type`: CInt, protocol: CInt, socketVector: Ptr[CInt], flags0: CInt, flags1: CInt): CInt = extern
+  def uv_pipe_open(handle: Ptr[Byte], file: CInt): CInt = extern
 
   def uv_ip4_addr(ip: CString, port: CInt, addr: Ptr[Byte]): CInt = extern
   def uv_ip6_addr(ip: CString, port: CInt, addr: Ptr[Byte]): CInt = extern

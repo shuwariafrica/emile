@@ -166,6 +166,24 @@ object EmileError:
     sealed abstract class TooManyOpenFiles private () extends EmileError("Too many open files", None) with IO
     case object TooManyOpenFiles extends TooManyOpenFiles
 
+    /** A path already exists where a create-exclusive open, a no-overwrite copy, or a `mkdir`
+      * required it to be absent (`EEXIST`).
+      */
+    sealed abstract class AlreadyExists private () extends EmileError("File already exists", None) with IO
+    case object AlreadyExists extends AlreadyExists
+
+    /** A directory to be removed still holds entries (`ENOTEMPTY`). */
+    sealed abstract class DirectoryNotEmpty private () extends EmileError("Directory not empty", None) with IO
+    case object DirectoryNotEmpty extends DirectoryNotEmpty
+
+    /** A path component expected to be a directory is not one (`ENOTDIR`). */
+    sealed abstract class NotADirectory private () extends EmileError("Not a directory", None) with IO
+    case object NotADirectory extends NotADirectory
+
+    /** A directory was given where a non-directory was required (`EISDIR`). */
+    sealed abstract class IsADirectory private () extends EmileError("Is a directory", None) with IO
+    case object IsADirectory extends IsADirectory
+
     /** An operation attempted after the owning `Resource` released the socket, server, file, or
       * watcher, or after an abortive `closeReset`.
       */
@@ -360,6 +378,10 @@ private[emile] object IOMapping:
     case ErrorCode.UV_EACCES | ErrorCode.UV_EPERM => EmileError.IO.PermissionDenied
     case ErrorCode.UV_ENOENT => EmileError.IO.NotFound
     case ErrorCode.UV_EMFILE | ErrorCode.UV_ENFILE => EmileError.IO.TooManyOpenFiles
+    case ErrorCode.UV_EEXIST => EmileError.IO.AlreadyExists
+    case ErrorCode.UV_ENOTEMPTY => EmileError.IO.DirectoryNotEmpty
+    case ErrorCode.UV_ENOTDIR => EmileError.IO.NotADirectory
+    case ErrorCode.UV_EISDIR => EmileError.IO.IsADirectory
     case other => EmileError.IO.System(ErrorCode(other))
 
 /** Maps a `uv_spawn` exec errno to a typed [[EmileError.Spawn]], falling through to

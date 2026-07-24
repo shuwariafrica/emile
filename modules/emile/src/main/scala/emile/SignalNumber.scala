@@ -52,6 +52,19 @@ object SignalNumber extends OpaqueType[SignalNumber, Int], OpaqueType.Eq[SignalN
   val SIGCHLD: SignalNumber = apply(posix.SIGCHLD)
   val SIGPROF: SignalNumber = apply(posix.SIGPROF)
 
+  /** `SIGKILL` - forced, uncatchable termination. A signal watcher cannot observe it (the kernel
+    * never delivers it to a handler); it serves `Process.kill` for an unconditional stop.
+    */
+  val SIGKILL: SignalNumber = apply(posix.SIGKILL)
+
+  /** `SIGSTOP` - forced, uncatchable suspension. As with [[SIGKILL]] a watcher cannot observe it;
+    * resume a stopped process with [[SIGCONT]].
+    */
+  val SIGSTOP: SignalNumber = apply(posix.SIGSTOP)
+
+  /** `SIGCONT` - resume a process suspended by [[SIGSTOP]]. */
+  val SIGCONT: SignalNumber = apply(posix.SIGCONT)
+
   // scala-native's posix layer does not bind SIGWINCH (it is not in POSIX.1); 28 is its Linux value.
   val SIGWINCH: SignalNumber = apply(28)
 
