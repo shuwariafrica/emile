@@ -58,7 +58,7 @@ private[emile] object LibUV:
   // The prev / curr uv_stat_t pointers are unused: only the status discriminates appeared/changed.
   type FSPollCB = CFuncPtr4[Ptr[Byte], CInt, Ptr[Byte], Ptr[Byte], Unit]
 
-  // uv_handle_type ordinals (for uv_handle_size).
+  // uv_handle_type ordinals (for uv_handle_size, and the values uv_guess_handle returns).
   inline val UV_ASYNC = 1
   inline val UV_FS_EVENT = 3
   inline val UV_FS_POLL = 4
@@ -66,7 +66,15 @@ private[emile] object LibUV:
   inline val UV_POLL = 8
   inline val UV_TCP = 12
   inline val UV_TIMER = 13
+  inline val UV_TTY = 14
+  inline val UV_UDP = 15
   inline val UV_SIGNAL = 16
+  inline val UV_FILE = 17
+
+  // uv_tty_mode_t: the two modes emile drives - NORMAL (cooked) and RAW_VT (raw input; on Unix
+  // RAW_VT collapses to the single raw mode, on Windows it adds ENABLE_VIRTUAL_TERMINAL_INPUT).
+  inline val UV_TTY_MODE_NORMAL = 0
+  inline val UV_TTY_MODE_RAW_VT = 3
 
   // uv_req_type ordinals (for uv_req_size).
   inline val UV_CONNECT = 2
@@ -197,6 +205,16 @@ private[unsafe] object LibUVExtern:
   def uv_signal_init(loop: Ptr[Byte], handle: Ptr[Byte]): CInt = extern
   def uv_signal_start(handle: Ptr[Byte], signalCb: LibUV.SignalCB, signum: CInt): CInt = extern
   def uv_signal_stop(handle: Ptr[Byte]): CInt = extern
+
+  // uv_tty_t (a uv_stream_t): a terminal handle. The 4th uv_tty_init parameter is deprecated and
+  // ignored since 1.23.1 (direction is auto-detected from the fd); a non-tty fd yields UV_EINVAL.
+  // uv_tty_reset_mode restores the first raw tty's termios and is async-signal-safe, so it is the
+  // crash-path restore. uv_guess_handle classifies a bare fd with no loop or handle.
+  def uv_guess_handle(fd: CInt): CInt = extern
+  def uv_tty_init(loop: Ptr[Byte], handle: Ptr[Byte], fd: CInt, unused: CInt): CInt = extern
+  def uv_tty_set_mode(handle: Ptr[Byte], mode: CInt): CInt = extern
+  def uv_tty_reset_mode(): CInt = extern
+  def uv_tty_get_winsize(handle: Ptr[Byte], width: Ptr[CInt], height: Ptr[CInt]): CInt = extern
 
   // uv_fs_event_t: a path-change watcher (inotify on Linux). uv_close stops and frees it, so no
   // separate stop binding is needed.
