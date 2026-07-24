@@ -51,6 +51,27 @@ object TCP:
   def bind(address: SocketAddress[IpAddress], options: TCPOptions): EmResource[EmileError.Bind, TCPServer] =
     Resource.make[EffIO.Of[EmileError.Bind], TCPServer](bindAcquire(address, options))(server => EffIO.liftF(StreamServer.release(server)))
 
+  /** Bind one listening server per worker loop, all sharing `address`'s port so the kernel
+    * distributes accepts across them, with the default [[TCPOptions]].
+    */
+  def bindPerWorker(address: SocketAddress[IpAddress]): EmResource[EmileError.Bind, TCPServerPool] =
+    bindPerWorker(address, TCPOptions.default)
+
+  /** Bind one listening server per worker loop, all sharing `address`'s port through `SO_REUSEPORT`
+    * so the kernel distributes incoming connections across the worker loops - the multi-core
+    * accept-distribution profile, yielding a [[ServerPool$ ServerPool]]. `SO_REUSEPORT` is
+    * structural to this surface and applied to every bind, so [[TCPOptions.reusePort]] is not
+    * consulted here (it keeps its single-bind, cross-process meaning on [[bind]]). Acquire is
+    * all-or-nothing: every listener binds and listens during acquire, and any failure releases
+    * those already bound and surfaces the typed [[EmileError.Bind]] here rather than later on an
+    * accept stream - including the `UV_ENOTSUP` a platform without `SO_REUSEPORT` returns at the
+    * first bind.
+    */
+  def bindPerWorker(address: SocketAddress[IpAddress], options: TCPOptions): EmResource[EmileError.Bind, TCPServerPool] =
+    Resource.make[EffIO.Of[EmileError.Bind], TCPServerPool](bindPerWorkerAcquire(address, options))(pool =>
+      EffIO.liftF(ServerPool.release(pool))
+    )
+
   /** Connect to `address` with the default [[TCPOptions]]. */
   def connect(address: SocketAddress[IpAddress]): EmResource[EmileError.Connect | EmileError.IO, TCPSocket] =
     connect(address, TCPOptions.default)
@@ -95,6 +116,57 @@ object TCP:
       yield server,
       EmileError.Bind.Unexpected(_)
     )
+
+  private def bindPerWorkerAcquire(address: SocketAddress[IpAddress], options: TCPOptions): EmIO[EmileError.Bind, TCPServerPool] =
+    // SO_REUSEPORT is structural to this surface: forced on regardless of options.reusePort, which is not
+    // consulted here (bindFlags then sets the flag on every one of the N binds).
+    val reuseOptions = options.copy(reusePort = true)
+    EffIO.attempt(
+      for
+        pollers <- LibUVPollingSystem.allPollers
+        listeners <- bindListeners(pollers, address, reuseOptions)
+        pool <- IO.fromEither(listeners)
+      yield ServerPool.construct(pool),
+      EmileError.Bind.Unexpected(_)
+    )
+
+  // Bind the first listener to `address` to resolve the concrete (possibly ephemeral) port, then bind one
+  // further listener per remaining worker loop to that resolved address, so all N share the one port.
+  private def bindListeners(
+    pollers: List[LibUVPoller],
+    address: SocketAddress[IpAddress],
+    options: TCPOptions
+  ): IO[Either[EmileError.Bind, List[TCPServer]]] =
+    pollers match
+      case Nil =>
+        IO.pure(Left(EmileError.Bind.Unexpected(new IllegalStateException("emile: no worker loops registered for bindPerWorker"))))
+      case first :: rest =>
+        bindOne(first, address, options).flatMap:
+          case Left(error) => IO.pure(Left(error))
+          case Right(head) => bindRemaining(rest, head.address, options, head :: Nil)
+
+  // All-or-nothing: on any failure the listeners already bound (newest-first in `acquired`) are released
+  // before the typed error surfaces, so a failed acquire leaks no listener.
+  private def bindRemaining(
+    pollers: List[LibUVPoller],
+    address: SocketAddress[IpAddress],
+    options: TCPOptions,
+    acquired: List[TCPServer]
+  ): IO[Either[EmileError.Bind, List[TCPServer]]] =
+    pollers match
+      case Nil => IO.pure(Right(acquired.reverse))
+      case poller :: rest =>
+        bindOne(poller, address, options).flatMap:
+          case Right(server) => bindRemaining(rest, address, options, server :: acquired)
+          case Left(error) => releaseAll(acquired).as(Left(error))
+
+  // One listener on `poller`'s loop through the existing single-bind install machinery, each with its own
+  // connection queue.
+  private def bindOne(poller: LibUVPoller, address: SocketAddress[IpAddress], options: TCPOptions): IO[Either[EmileError.Bind, TCPServer]] =
+    UnboundedQueue[IO, Either[EmileError.IO, Unit]].flatMap(queue => Routing.onOwner(poller)(bindInstall(poller, address, options, queue)))
+
+  private def releaseAll(servers: List[TCPServer]): IO[Unit] =
+    servers.foldLeft(IO.unit)((close, server) => close *> StreamServer.release(server))
 
   // FFI: handle / sockaddr calloc null-checks, uv_close cleanup paths for half-built resources.
   // scalafix:off DisableSyntax

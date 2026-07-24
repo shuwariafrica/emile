@@ -223,9 +223,6 @@ object StreamServer:
     case IPCMode.Writable => LibUV.UV_WRITABLE
     case IPCMode.ReadWrite => LibUV.UV_READABLE | LibUV.UV_WRITABLE
 
-  // An awaiting supervisor gives serve its shutdown semantics: a normal exit (shutdown fired) joins the
-  // in-flight handlers - the drain-not-cancel contract - while a cancellation cancels them. maxConcurrent
-  // < 1 is a programmer error, hence a defect rather than a typed failure.
   private def serveLoop[K <: SocketKind, E <: Throwable](
     server: StreamServer[K],
     maxConcurrent: Int,
@@ -233,11 +230,37 @@ object StreamServer:
     onError: (EmileError.IO | E) => IO[Unit],
     handler: Socket[K] => EmIO[E, Unit]
   )(using TypeTest[Throwable, E]): EmIO[Nothing, Unit] =
+    serveScaffold(maxConcurrent)((permits, supervisor) => acceptLoop(server, shutdown, permits, supervisor, onError, handler))
+
+  /** Run the accept-and-handle loop over every server in `servers` under ONE `Supervisor` and ONE
+    * `Semaphore`, so `maxConcurrent` bounds the handlers running across all of them together - the
+    * global-limit path a replicated [[ServerPool$ ServerPool]] serves on. Each server's loop runs
+    * on its own poller, so an accepted socket stays pinned to the listener that accepted it.
+    */
+  private[emile] def serveAll[K <: SocketKind, E <: Throwable](
+    servers: List[StreamServer[K]],
+    maxConcurrent: Int,
+    shutdown: IO[Unit],
+    onError: (EmileError.IO | E) => IO[Unit],
+    handler: Socket[K] => EmIO[E, Unit]
+  )(using TypeTest[Throwable, E]): EmIO[Nothing, Unit] =
+    serveScaffold(maxConcurrent)((permits, supervisor) =>
+      Stream
+        .emits(servers)
+        .covary[IO]
+        .parEvalMapUnordered(servers.length.max(1))(server => acceptLoop(server, shutdown, permits, supervisor, onError, handler))
+        .compile
+        .drain
+    )
+
+  // An awaiting supervisor gives serve its shutdown semantics: a normal exit (shutdown fired) joins the
+  // in-flight handlers - the drain-not-cancel contract - while a cancellation cancels them. maxConcurrent
+  // < 1 is a programmer error, hence a defect rather than a typed failure. `run` receives the shared
+  // permits and supervisor so a single listener and a replicated pool share one global limit.
+  private def serveScaffold(maxConcurrent: Int)(run: (Semaphore[IO], Supervisor[IO]) => IO[Unit]): EmIO[Nothing, Unit] =
     EffIO.liftF(
       IO.raiseWhen(maxConcurrent < 1)(new IllegalArgumentException("serve maxConcurrent must be at least 1")) *>
-        Supervisor[IO](await = true).use(supervisor =>
-          Semaphore[IO](maxConcurrent.toLong).flatMap(permits => acceptLoop(server, shutdown, permits, supervisor, onError, handler))
-        )
+        Supervisor[IO](await = true).use(supervisor => Semaphore[IO](maxConcurrent.toLong).flatMap(permits => run(permits, supervisor)))
     )
 
   private def acceptLoop[K <: SocketKind, E <: Throwable](
@@ -252,9 +275,13 @@ object StreamServer:
       if continue then acceptLoop(server, shutdown, permits, supervisor, onError, handler) else IO.unit
     )
 
-  // The accept and the handler-fork are one uncancelable step, so an accepted socket is always owned by a
-  // supervised fiber that releases it - a cancel can never strand one. Only the two waits are cancelable
-  // and neither holds a socket; a permit taken but not handed to a handler is released here.
+  // Wait for a connection first, THEN acquire a permit: the permit bounds concurrent handlers, not the
+  // wait, so a pool of N listeners sharing one Semaphore never starves - every listener can take its own
+  // connection even when maxConcurrent < N (permit-before-wait would let only maxConcurrent listeners ever
+  // accept). The kernel accept queue still absorbs backpressure while a permit is awaited: the connection
+  // is not uv_accept'd until the permit is held. The accept and the handler-fork are one uncancelable step,
+  // so an accepted socket is always owned by a supervised fiber that releases it - a cancel can never
+  // strand one. Both waits are cancelable and neither holds a socket or a permit.
   private def acceptAndFork[K <: SocketKind, E <: Throwable](
     server: StreamServer[K],
     shutdown: IO[Unit],
@@ -264,13 +291,13 @@ object StreamServer:
     handler: Socket[K] => EmIO[E, Unit]
   )(using TypeTest[Throwable, E]): IO[Boolean] =
     IO.uncancelable { poll =>
-      poll(IO.race(shutdown, permits.acquire)).flatMap:
+      poll(IO.race(shutdown, server.connections.take)).flatMap:
         case Left(()) => IO.pure(false)
-        case Right(()) =>
-          poll(IO.race(shutdown, server.connections.take)).flatMap:
-            case Left(()) => permits.release.as(false)
-            case Right(Left(error)) => permits.release *> onError(error).as(true)
-            case Right(Right(())) =>
+        case Right(Left(error)) => onError(error).as(true)
+        case Right(Right(())) =>
+          poll(IO.race(shutdown, permits.acquire)).flatMap:
+            case Left(()) => IO.pure(false)
+            case Right(()) =>
               Routing
                 .onOwner(poller(server))(performAccept(server))
                 .flatMap:
