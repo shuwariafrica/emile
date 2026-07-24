@@ -199,6 +199,38 @@ object EmileError:
       def unapply(u: Unexpected): Some[Throwable] = Some(u.cause)
   end IO
 
+  /** Failures from `Process.spawn` / `Process.spawnDetached`. A spawn failure is synchronous:
+    * `uv_spawn` returns the exec errno and the exit callback never fires, so this is the
+    * acquisition error, never a value on the running process.
+    */
+  sealed trait Spawn extends EmileError
+
+  object Spawn:
+    sealed abstract class NotFound private () extends EmileError("No such file or directory", None) with Spawn
+    case object NotFound extends NotFound
+
+    sealed abstract class PermissionDenied private () extends EmileError("Permission denied", None) with Spawn
+    case object PermissionDenied extends PermissionDenied
+
+    /** A spawn argument emile rejected before reaching libuv - for example an empty executable
+      * path, or a piped standard stream on a detached process whose pipe ends nothing would own.
+      */
+    final case class InvalidArgument(detail: String) extends EmileError(s"Invalid argument: $detail", None) with Spawn
+
+    final case class System(code: ErrorCode) extends EmileError("", None) with Spawn:
+      override def getMessage: String = ErrorCode.describe(code)
+
+    final class Unexpected private (val cause: Throwable) extends EmileError("", Some(cause)) with Spawn:
+      override def getMessage: String = s"Unexpected spawn failure: ${cause.getMessage}"
+
+    object Unexpected:
+      def apply(cause: Throwable): Spawn = cause match
+        case e: Spawn => e
+        case t => new Unexpected(t)
+
+      def unapply(u: Unexpected): Some[Throwable] = Some(u.cause)
+  end Spawn
+
   /** Failures from `DNS.resolve` / `DNS.reverse`. */
   sealed trait DNS extends HostConnect
 
@@ -329,6 +361,16 @@ private[emile] object IOMapping:
     case ErrorCode.UV_ENOENT => EmileError.IO.NotFound
     case ErrorCode.UV_EMFILE | ErrorCode.UV_ENFILE => EmileError.IO.TooManyOpenFiles
     case other => EmileError.IO.System(ErrorCode(other))
+
+/** Maps a `uv_spawn` exec errno to a typed [[EmileError.Spawn]], falling through to
+  * [[EmileError.Spawn.System]] for codes with no dedicated case. `ENOENT` (no such executable) and
+  * `EACCES` / `EPERM` (not executable) are the two exec failures with named cases.
+  */
+private[emile] object SpawnMapping:
+  def fromCode(code: Int): EmileError.Spawn = code match
+    case ErrorCode.UV_ENOENT => EmileError.Spawn.NotFound
+    case ErrorCode.UV_EACCES | ErrorCode.UV_EPERM => EmileError.Spawn.PermissionDenied
+    case other => EmileError.Spawn.System(ErrorCode(other))
 
 /** Maps a libuv resolver code, with the host being resolved, to a typed [[EmileError.DNS]]. The
   * `getaddrinfo` name-resolution codes become `UnknownHost` (which carries the host); all others

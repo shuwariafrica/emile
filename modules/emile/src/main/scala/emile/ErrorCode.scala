@@ -90,6 +90,7 @@ object ErrorCode:
   val UV_ENOMEM: Int = -errno.ENOMEM
   val UV_ENETDOWN: Int = -errno.ENETDOWN
   val UV_EINVAL: Int = -errno.EINVAL
+  val UV_ESRCH: Int = -errno.ESRCH
 
   // libuv pseudo-codes with no errno - fixed on every platform, hence literals.
   inline val UV_EOF = -4095

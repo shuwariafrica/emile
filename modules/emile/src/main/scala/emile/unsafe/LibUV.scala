@@ -57,6 +57,31 @@ private[emile] object LibUV:
   type FSEventCB = CFuncPtr4[Ptr[Byte], CString, CInt, CInt, Unit]
   // The prev / curr uv_stat_t pointers are unused: only the status discriminates appeared/changed.
   type FSPollCB = CFuncPtr4[Ptr[Byte], CInt, Ptr[Byte], Ptr[Byte], Unit]
+  // uv_exit_cb: (process, int64 exit_status, int term_signal). exit_status carries the 8-bit wait code,
+  // term_signal the terminating signal; they are mutually exclusive (one is zero).
+  type ExitCB = CFuncPtr3[Ptr[Byte], CLongLong, CInt, Unit]
+
+  /** `uv_stdio_container_t`: `flags` at offset 0, the `union { uv_stream_t* stream; int fd; }` at
+    * offset 8. A create-pipe slot sets `_2` to the parent `uv_pipe_t`; an inherit-fd slot writes
+    * the int into the union's low bytes by reinterpreting `_2` as `Ptr[CInt]`.
+    */
+  type StdioContainer = CStruct2[CInt, Ptr[Byte]]
+
+  /** `uv_process_options_t`, field-for-field (64 bytes, every field naturally aligned on x86_64
+    * LP64): exit_cb, file, args, env, cwd, flags, stdio_count, stdio, uid, gid.
+    */
+  type ProcessOptions = CStruct10[
+    ExitCB,
+    CString,
+    Ptr[CString],
+    Ptr[CString],
+    CString,
+    CUnsignedInt,
+    CInt,
+    Ptr[StdioContainer],
+    CUnsignedInt,
+    CUnsignedInt
+  ]
 
   // uv_handle_type ordinals (for uv_handle_size, and the values uv_guess_handle returns).
   inline val UV_ASYNC = 1
@@ -64,6 +89,7 @@ private[emile] object LibUV:
   inline val UV_FS_POLL = 4
   inline val UV_NAMED_PIPE = 7
   inline val UV_POLL = 8
+  inline val UV_PROCESS = 10
   inline val UV_TCP = 12
   inline val UV_TIMER = 13
   inline val UV_TTY = 14
@@ -112,6 +138,21 @@ private[emile] object LibUV:
 
   // uv_fs open flag.
   inline val UV_FS_O_RDONLY = 0
+
+  // uv_stdio_flags. The direction flags are the child's perspective; UV_READABLE_PIPE means the child
+  // reads (parent writes), UV_WRITABLE_PIPE the child writes (parent reads), both together duplex.
+  // UV_NONBLOCK_PIPE (0x40) is deliberately absent: the Unix uv_spawn stdio path ignores it.
+  inline val UV_IGNORE = 0x00
+  inline val UV_CREATE_PIPE = 0x01
+  inline val UV_INHERIT_FD = 0x02
+  inline val UV_READABLE_PIPE = 0x10
+  inline val UV_WRITABLE_PIPE = 0x20
+
+  // uv_process_flags emile drives. SETUID / SETGID gate the uid / gid fields; DETACHED makes the child
+  // a session leader whose loop reference is dropped by uv_unref. The Windows-only flags are omitted.
+  inline val UV_PROCESS_SETUID = 0x01
+  inline val UV_PROCESS_SETGID = 0x02
+  inline val UV_PROCESS_DETACHED = 0x08
 
   export LibUVExtern.*
 
@@ -205,6 +246,16 @@ private[unsafe] object LibUVExtern:
   def uv_signal_init(loop: Ptr[Byte], handle: Ptr[Byte]): CInt = extern
   def uv_signal_start(handle: Ptr[Byte], signalCb: LibUV.SignalCB, signum: CInt): CInt = extern
   def uv_signal_stop(handle: Ptr[Byte]): CInt = extern
+
+  // uv_process_t: uv_spawn forks and execs, returning the exec errno synchronously (exit_cb never fires
+  // on failure). uv_unref drops the handle's loop reference for a detached child; uv_process_kill /
+  // uv_kill send a signal by handle / pid; uv_disable_stdio_inheritance is a best-effort CLOEXEC sweep.
+  def uv_spawn(loop: Ptr[Byte], handle: Ptr[Byte], options: Ptr[LibUV.ProcessOptions]): CInt = extern
+  def uv_process_kill(handle: Ptr[Byte], signum: CInt): CInt = extern
+  def uv_kill(pid: CInt, signum: CInt): CInt = extern
+  def uv_process_get_pid(handle: Ptr[Byte]): CInt = extern
+  def uv_unref(handle: Ptr[Byte]): Unit = extern
+  def uv_disable_stdio_inheritance(): Unit = extern
 
   // uv_tty_t (a uv_stream_t): a terminal handle. The 4th uv_tty_init parameter is deprecated and
   // ignored since 1.23.1 (direction is auto-detected from the fd); a non-tty fd yields UV_EINVAL.
