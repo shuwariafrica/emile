@@ -20,8 +20,6 @@ import scala.scalanative.libc.signal as clib
 import scala.scalanative.posix.fcntl
 import scala.scalanative.posix.stdlib as posixStdlib
 import scala.scalanative.posix.sys.ioctl as ioctlLib
-import scala.scalanative.posix.termios
-import scala.scalanative.posix.termiosOps.*
 import scala.scalanative.posix.unistd
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
@@ -78,10 +76,12 @@ final class TtySpec extends EmileSuite:
             .open(sec)
             .use { tty =>
               for
-                _ <- EffIO.liftF(IO(assert(isCanonical(inspect), "terminal starts in canonical mode")))
-                _ <- tty.raw.use(_ => EffIO.liftF(IO(assert(!isCanonical(inspect), "raw mode clears canonical mode"))))
-                _ <- EffIO.liftF(IO(assert(isCanonical(inspect), "release restores canonical mode")))
-              yield ()
+                original <- EffIO.liftF(IO(captureTermios(inspect)))
+                duringRaw <- tty.raw.use(_ => EffIO.liftF(IO(captureTermios(inspect))))
+                restored <- EffIO.liftF(IO(captureTermios(inspect)))
+              yield
+                assert(!duringRaw.sameElements(original), "raw mode changes the terminal attributes")
+                assert(restored.sameElements(original), "release restores the original attributes")
             }
             .absolve
             .timeout(5.seconds)
@@ -97,14 +97,17 @@ final class TtySpec extends EmileSuite:
           Tty
             .open(sec)
             .use { tty =>
-              tty.raw.use { _ =>
-                EffIO.liftF(IO {
-                  assert(!isCanonical(inspect), "raw mode is in force")
-                  // The shutdown hook's body, run while the raw window is open, must restore the terminal.
-                  TtyRawRestore.restoreOnHardExit()
-                  assert(isCanonical(inspect), "the hard-exit restore returns the terminal to cooked mode")
-                })
-              }
+              for
+                original <- EffIO.liftF(IO(captureTermios(inspect)))
+                _ <- tty.raw.use { _ =>
+                       EffIO.liftF(IO {
+                         assert(!captureTermios(inspect).sameElements(original), "raw mode is in force")
+                         // The shutdown hook's body, run while the raw window is open, must restore the terminal.
+                         TtyRawRestore.restoreOnHardExit()
+                         assert(captureTermios(inspect).sameElements(original), "the hard-exit restore returns the original attributes")
+                       })
+                     }
+              yield ()
             }
             .absolve
             .timeout(5.seconds)
@@ -218,7 +221,8 @@ final class TtySpec extends EmileSuite:
   private def fileResource: Resource[IO, Int] =
     Resource.make(IO(openDevNull()))(fd => IO(unistd.close(fd): Unit))
 
-  // FFI: pseudo-terminal setup, winsize and termios structs, and raw reads over native pointers.
+  // FFI: pseudo-terminal setup, the winsize struct, and raw terminal-attribute and stream reads over
+  // native pointers.
   // scalafix:off DisableSyntax
 
   private def openPty(): Pty =
@@ -253,10 +257,24 @@ final class TtySpec extends EmileSuite:
     ws._4 = 0.toUShort
     ioctlLib.ioctl(fd, TIOCSWINSZ, ws.asInstanceOf[Ptr[Byte]]): Unit
 
-  private def isCanonical(fd: Int): Boolean =
-    val tio = stackalloc[termios.termios]()
-    termios.tcgetattr(fd, tio): Unit
-    (tio.c_lflag.toLong & termios.ICANON.toLong) != 0L
+  // The terminal attributes as an opaque byte snapshot: tcgetattr writes struct termios into an
+  // over-allocated, zeroed buffer, so a byte comparison (raw differs from cooked, restore equals the
+  // original) needs no struct fields - and pulls in no posixlib termios C shim, whose c_ispeed /
+  // c_ospeed accessors do not link under musl.
+  private def captureTermios(fd: Int): Array[Byte] =
+    val size = 256
+    val buf = stackalloc[Byte](size)
+    var i = 0
+    while i < size do
+      buf(i) = 0.toByte
+      i += 1
+    CTermios.tcgetattr(fd, buf): Unit
+    val out = new Array[Byte](size)
+    i = 0
+    while i < size do
+      out(i) = buf(i)
+      i += 1
+    out
 
   private def readFrom(fd: Int, count: Int): String =
     val buf = stackalloc[Byte](count)
@@ -275,3 +293,9 @@ final class TtySpec extends EmileSuite:
   // scalafix:on DisableSyntax
 
 end TtySpec
+
+// tcgetattr against an opaque, over-allocated buffer - avoids the posixlib termios struct binding,
+// whose C shim references musl-absent c_ispeed / c_ospeed and so fails to link the musl test binary.
+@extern
+private object CTermios:
+  def tcgetattr(fd: CInt, buf: Ptr[Byte]): CInt = extern
