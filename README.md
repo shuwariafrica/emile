@@ -28,7 +28,7 @@ It is **Native-first**: the public API is shaped for the Scala Native representa
 
 | Module      | Artifact                        | Purpose                                                                                                            |
 |-------------|---------------------------------|--------------------------------------------------------------------------------------------------------------------|
-| `emile`     | `africa.shuwari::emile`     | Core library: bootstrap, TCP, IPC (Unix-domain sockets), DNS, timers, signals, files, filesystem watching, fd-polling, terminals. |
+| `emile`     | `africa.shuwari::emile`     | Core library: bootstrap, TCP, IPC (Unix-domain sockets), DNS, timers, signals, files, filesystem watching, fd-polling, terminals, subprocesses. |
 | `emile-fs2` | `africa.shuwari::emile-fs2` | fs2-networking interop: `TCPSocket.asFs2` / `TCPServer.acceptFs2` adapters onto `fs2.io.net.Socket[IO]`. Optional. |
 
 ```scala
@@ -353,6 +353,70 @@ so a second concurrent `raw` - on this or any terminal - fails with `EmileError.
 `tty.size` reads the window in character cells; `WinSize(0, 0)` is a legitimate reading on a pseudo-terminal whose
 controller never set dimensions, so fall back to a default where a real size is required. `tty.resizes` emits the size
 now, then a fresh reading on each `SIGWINCH` - the resize feed for a full-screen UI.
+
+### Process
+
+```scala
+import emile.*
+
+// A config value; the entry point pipes all three streams. Process[Piped, Piped, Piped].
+val config = ProcessConfig("/bin/cat", Nil)
+
+Process.spawn(config).use: p =>
+  p.stdin.write(payload) *> p.stdin.close *>   // close signals end-of-input, so `cat` echoes and exits
+    p.stdout.reads.compile.toVector
+```
+
+`ProcessConfig(file, args)` describes a child; `args` are the arguments after `argv(0)`, which is always `file`. The
+three phantom parameters track each standard stream's state, so a direction-typed accessor resolves only on a piped
+stream: `p.stdin` (a write surface) on `Process[Piped, _, _]`, `p.stdout` / `p.stderr` (read surfaces) on a piped
+output. Reading a stream configured to inherit or ignore is a **compile error**. The child streams ride the same
+byte-stream engine as a [socket](#tcp) - `p.stdin` offers `write(slice)`, `writes`, and `close` (end-of-input);
+`p.stdout` / `p.stderr` offer `reads`, `read(f)`, `consume`. Presets transition the phantoms, and the remaining
+builders fill in the rest:
+
+| Builder | Effect |
+|---|---|
+| `inheritStdin` / `ignoreStdin` (and the `Stdout` / `Stderr` forms) | share the parent's descriptor / redirect to `/dev/null` |
+| `env(Env.Replace(vars))` / `env(Env.Extend(overrides))` | replace the environment / merge overrides onto the parent's (libuv has no merge, so `Extend` merges emile-side) |
+| `cwd(path)` | run in `path` rather than the parent's directory |
+| `credentials(uid, gid)` | `setuid` / `setgid` the child (needs the privilege to switch) |
+| `onExit(policy)` | the resource-release policy (below) |
+| `extraFds(fds)` | descriptors beyond stdio (below) |
+
+`p.status` awaits the child's `ExitStatus` - `Exited(code)` or `Signaled(signal)`, the two mutually exclusive; `p.tryStatus`
+polls it without blocking. Stream end and process exit have **no guaranteed order**, so await each independently rather
+than treating one as implying the other. `p.kill(signal)` signals the child, and signalling one already exited and reaped
+is `EmileError.IO.AlreadyClosed`. Spawn failure is synchronous and typed `EmileError.Spawn` - `NotFound` for an
+unresolvable executable, `PermissionDenied` for a non-executable one.
+
+On release the config's `OnExit` policy brings the child down, then it is reaped and its handle closed:
+
+| `OnExit` | Behaviour |
+|---|---|
+| `Await` | wait for the child to exit on its own - blocks until it does |
+| `Kill` | `SIGKILL`, then reap |
+| `Term(grace)` | `SIGTERM`, reap within `grace`; a child outliving the grace keeps running |
+| `TermThenKill(grace)` | `SIGTERM`, reap within `grace`, else `SIGKILL` - the default |
+
+`extraFds(fds)` wires descriptors beyond stdio, the nth entry (0-based) becoming the child's descriptor `3 + n`:
+
+- `ExtraFd.Piped(direction)` - emile creates the pipe; the parent end is `p.extraInput(fd)` (a stream the child reads)
+  or `p.extraOutput(fd)` (one it writes), a duplex exposing both.
+- `ExtraFd.InheritFd(fd)` - an existing descriptor duplicated into the child. **It MUST be created close-on-exec.**
+  libuv clears close-on-exec only on the descriptors it explicitly wires, so a non-`O_CLOEXEC` pipe leaks its other end
+  into the child, which then never sees end-of-file - an observed deadlock. Create the pipe with `O_CLOEXEC` and close
+  the parent's own ends yourself.
+
+`Process.spawnDetached(config)` runs the child in its own session, unreferenced from the loop so the runtime need not
+stay alive for it, and returns a `Detached` (its `pid` and `kill`) rather than a resource. Its standard streams must be
+inherited or ignored - a detached child has no owner for a pipe - so a piped stream is rejected with
+`EmileError.Spawn.InvalidArgument`. A detached child the runtime outlives is reaped when it exits; one that outlives the
+runtime becomes a zombie until the parent process exits.
+
+`Process.disableStdioInheritance` sets close-on-exec on every descriptor the process has already inherited, so they do
+not leak into later children. It is best-effort and process-global; call it once at startup, before any emile descriptor
+exists, and rely on creating handed-off descriptors close-on-exec as the load-bearing discipline - never on this sweep.
 
 ## Timeouts, retries, and limits
 
