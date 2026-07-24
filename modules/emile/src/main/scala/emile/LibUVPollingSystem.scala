@@ -18,6 +18,7 @@ package emile
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
+import scala.collection.concurrent.TrieMap
 import scala.concurrent.ExecutionContext
 
 import cats.effect.IO
@@ -57,15 +58,24 @@ final class LibUVPollingSystem private (config: LoopConfig, offloadParallelism: 
 
   private val offloadLane: ExecutionContext = ExecutionContext.fromExecutor(offloadThreads)
 
+  // The live per-worker pollers this system created, appended in makePoller and removed in closePoller.
+  // Both run on the runtime's construction / shutdown paths - the WSTP builds its poller array before any
+  // fibre runs - so the set is stable by the time a fibre reads it through Access.allPollers to place one
+  // listener on every worker loop. Only the presence of each poller matters, so the Unit values are inert.
+  private val pollers: TrieMap[LibUVPoller, Unit] = new TrieMap[LibUVPoller, Unit]()
+
   def makeApi(ctx: PollingContext[LibUVPoller]): LibUVPollingSystem.Access =
-    new LibUVPollingSystem.Access(ctx, signals, offloadLane)
+    new LibUVPollingSystem.Access(ctx, signals, offloadLane, pollers)
 
   def makePoller(): LibUVPoller =
     val p = new LibUVPoller(config)
     signals.electSupervisor(p)
+    pollers.put(p, ()): Unit
     p
 
-  def closePoller(p: LibUVPoller): Unit = p.close()
+  def closePoller(p: LibUVPoller): Unit =
+    pollers.remove(p): Unit
+    p.close()
 
   def poll(p: LibUVPoller, nanos: Long): PollResult = p.poll(nanos)
 
@@ -110,13 +120,16 @@ object LibUVPollingSystem:
   final class Access private[emile] (
     ctx: PollingContext[LibUVPoller],
     private[emile] val signals: SignalSupervisor,
-    private[emile] val offload: ExecutionContext
+    private[emile] val offload: ExecutionContext,
+    private val pollers: TrieMap[LibUVPoller, Unit]
   ):
 
     private[emile] def withCurrentPoller[A](f: LibUVPoller => IO[A]): IO[A] =
       IO.async_[LibUVPoller](cb => ctx.accessPoller(p => cb(Right(p)))).flatMap(f)
 
     private[emile] def isOwnPoller(p: LibUVPoller): Boolean = ctx.ownPoller(p)
+
+    private[emile] def allPollers: List[LibUVPoller] = pollers.keysIterator.toList
 
   /** The libuv poller of the calling work-stealing worker - the entry point through which a
     * libuv-backed operation reaches its loop. Fails with
@@ -127,6 +140,17 @@ object LibUVPollingSystem:
     IO.pollers.flatMap: pollers =>
       pollers.collectFirst { case access: Access => access } match
         case Some(access) => access.withCurrentPoller(IO.pure)
+        case None => IO.raiseError(EmileError.Runtime.MissingLibUVPollingSystem)
+
+  /** Every live per-worker poller of the calling runtime - the entry point through which
+    * `TCP.bindPerWorker` reaches all worker loops to place one listener on each. Fails with
+    * `EmileError.Runtime.MissingLibUVPollingSystem` when the runtime carries no libuv polling
+    * system.
+    */
+  private[emile] def allPollers: IO[List[LibUVPoller]] =
+    IO.pollers.flatMap: pollers =>
+      pollers.collectFirst { case access: Access => access } match
+        case Some(access) => IO.pure(access.allPollers)
         case None => IO.raiseError(EmileError.Runtime.MissingLibUVPollingSystem)
 
   /** The calling runtime's [[emile.unsafe.SignalSupervisor SignalSupervisor]] - the entry point
