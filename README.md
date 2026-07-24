@@ -18,8 +18,8 @@ object EchoServer extends EmileIOApp.Simple:
 
 Émile is the Scala Native event-loop integration cats-effect always wanted: one libuv `uv_loop_t` per work-stealing
 worker, plugged into cats-effect's `PollingSystem` hook. Every TCP, IPC, DNS, timer, signal, file, filesystem-watch,
-and fd-poll operation runs on the loop thread that owns its handle - the worker the resource was acquired on - with no
-`Future`/`Promise` indirection and no separate executor.
+fd-poll, and terminal operation runs on the loop thread that owns its handle - the worker the resource was acquired on -
+with no `Future`/`Promise` indirection and no separate executor.
 
 It is **Native-first**: the public API is shaped for the Scala Native representation; the typed-error channel is
 `boilerplate.effect.EffIO[+E <: Throwable, +A]`.
@@ -28,7 +28,7 @@ It is **Native-first**: the public API is shaped for the Scala Native representa
 
 | Module      | Artifact                        | Purpose                                                                                                            |
 |-------------|---------------------------------|--------------------------------------------------------------------------------------------------------------------|
-| `emile`     | `africa.shuwari::emile`     | Core library: bootstrap, TCP, IPC (Unix-domain sockets), DNS, timers, signals, files, filesystem watching, fd-polling. |
+| `emile`     | `africa.shuwari::emile`     | Core library: bootstrap, TCP, IPC (Unix-domain sockets), DNS, timers, signals, files, filesystem watching, fd-polling, terminals. |
 | `emile-fs2` | `africa.shuwari::emile-fs2` | fs2-networking interop: `TCPSocket.asFs2` / `TCPServer.acceptFs2` adapters onto `fs2.io.net.Socket[IO]`. Optional. |
 
 ```scala
@@ -319,6 +319,40 @@ socket.sendFile(file, 0L, size)    // single uv_fs_sendfile syscall, zero-copy, 
 (0 when the socket send buffer is full). It writes the raw descriptor outside libuv's write queue, so it must not
 overlap an in-flight `write` or an `endOfOutput` half-close on the same socket - a concurrent one fails fast with
 `EmileError.IO.ConflictingOperation`. For a complete, backpressured body, prefer `file.reads.through(socket.writes)`.
+
+### Tty
+
+```scala
+import emile.*
+
+// Classify a descriptor before opening it; both calls are loop-free and infallible.
+Tty.guess(0)  // FdKind: Tty | Pipe | File | Tcp | Udp | Unknown
+Tty.isTty(1)  // Boolean - the isatty short-circuit
+
+Tty.open(0).use: tty =>
+  tty.size                 // EmIO[EmileError.IO, WinSize] - WinSize(cols, rows)
+  tty.resizes              // EmStream[EmileError.IO, WinSize] - current size, then one reading per SIGWINCH
+  tty.raw.use: _ =>        // raw input while held; cooked mode restored on release
+    tty.reads.through(render)
+```
+
+`Tty.open(fd)` wraps a `uv_tty_t` over a terminal descriptor; libuv reopens the terminal and drives a private
+non-blocking duplicate, so the caller's `fd` is unaffected. A non-terminal descriptor is a typed
+`EmileError.IO.InvalidArgument`. A `Tty` shares the byte-stream surface of a [socket](#tcp) - `reads`, `read(f)`,
+`consume`, `write(slice)`, `writes` - so terminal input and output ride the same machinery; escape-sequence parsing
+(keys, mouse, paste) is a layer above emile.
+
+`tty.raw` puts the terminal in raw mode for the resource's scope - input unbuffered, uninterpreted, and unechoed - and
+restores cooked mode on release. The restore holds across **every** exit path, so a dying program never leaves the shell
+in raw mode: orderly exit and cancellation through the release; the fatal signals (`SIGSEGV`, `SIGBUS`, `SIGILL`,
+`SIGFPE`, `SIGABRT`) through handlers installed only for the raw window, which restore the terminal then re-raise so the
+original crash still reports; and a non-signal hard exit through a shutdown hook. `SIGINT`, `SIGTERM`, and `SIGTSTP` are
+left to you (watch them through [Signal](#signal)). The crash-safe restore rests on a single raw terminal per process,
+so a second concurrent `raw` - on this or any terminal - fails with `EmileError.IO.ConflictingOperation`.
+
+`tty.size` reads the window in character cells; `WinSize(0, 0)` is a legitimate reading on a pseudo-terminal whose
+controller never set dimensions, so fall back to a default where a real size is required. `tty.resizes` emits the size
+now, then a fresh reading on each `SIGWINCH` - the resize feed for a full-screen UI.
 
 ## Timeouts, retries, and limits
 
