@@ -15,6 +15,7 @@
  */
 package emile
 
+import java.nio.file.Path
 import scala.concurrent.duration.FiniteDuration
 import scala.scalanative.libc.stdlib
 import scala.scalanative.unsafe.CInt
@@ -23,6 +24,7 @@ import scala.scalanative.unsafe.CUnsignedInt
 import scala.scalanative.unsafe.Ptr
 import scala.scalanative.unsafe.Zone
 import scala.scalanative.unsafe.fromCString
+import scala.scalanative.unsafe.sizeof
 import scala.scalanative.unsafe.toCString
 import scala.scalanative.unsigned.*
 
@@ -85,7 +87,7 @@ object FS:
     * watch keeps reporting its entries' changes. For a path inotify cannot serve (some network or
     * container filesystems) use [[poll]].
     */
-  def watch(path: java.nio.file.Path): EmResource[EmileError.IO, FS] =
+  def watch(path: Path): EmResource[EmileError.IO, FS] =
     Resource.make[EffIO.Of[EmileError.IO], FS](
       acquire(LibUV.UV_FS_EVENT)((poller, handle) => LibUV.uv_fs_event_init(poller.loop, handle)) { (_, handle) =>
         Zone(LibUV.uv_fs_event_start(handle, fsEventCb, toCString(path.toString), 0.toUInt))
@@ -101,7 +103,7 @@ object FS:
     * interval costs a `stat`, so choose a period of seconds; a zero or sub-millisecond interval
     * polls every millisecond.
     */
-  def poll(path: java.nio.file.Path, interval: FiniteDuration): EmResource[EmileError.IO, FS] =
+  def poll(path: Path, interval: FiniteDuration): EmResource[EmileError.IO, FS] =
     Resource.make[EffIO.Of[EmileError.IO], FS](
       acquire(LibUV.UV_FS_POLL)((poller, handle) => LibUV.uv_fs_poll_init(poller.loop, handle)) { (_, handle) =>
         Zone(LibUV.uv_fs_poll_start(handle, fsPollCb, toCString(path.toString), intervalMillis(interval)))
@@ -134,6 +136,342 @@ object FS:
         .resource(consumer(fs, () => fs.changesActive, active => fs.changesActive = active))
         .flatMap(_ => Stream.repeatEval[EmIO.Of[EmileError.IO], Unit](changesPull(fs)))
   end extension
+
+  /** The full [[FileStatus]] of `path`, following a final symbolic link (`stat`). */
+  def stat(path: Path): EmIO[EmileError.IO, FileStatus] =
+    pathOp(statusResult)((poller, req) => Zone(LibUV.uv_fs_stat(poller.loop, req, toCString(path.toString), fsDeliveryCb)))
+
+  /** The full [[FileStatus]] of `path` itself, not following a final symbolic link (`lstat`). */
+  def lstat(path: Path): EmIO[EmileError.IO, FileStatus] =
+    pathOp(statusResult)((poller, req) => Zone(LibUV.uv_fs_lstat(poller.loop, req, toCString(path.toString), fsDeliveryCb)))
+
+  /** The [[FileSystemInfo]] of the filesystem holding `path` (`statfs`). */
+  def statfs(path: Path): EmIO[EmileError.IO, FileSystemInfo] =
+    pathOp(statfsResult)((poller, req) => Zone(LibUV.uv_fs_statfs(poller.loop, req, toCString(path.toString), fsDeliveryCb)))
+
+  /** The canonical absolute form of `path`, resolving every symbolic link (`realpath`). */
+  def realpath(path: Path): EmIO[EmileError.IO, Path] =
+    pathOp(pathResult)((poller, req) => Zone(LibUV.uv_fs_realpath(poller.loop, req, toCString(path.toString), fsDeliveryCb)))
+
+  /** Whether `path` is accessible to the calling process for `mode` - `false` also for a path that
+    * does not exist or is not permitted, so the everyday question answers without an exception; any
+    * other failure stays typed.
+    */
+  def access(path: Path, mode: FileAccess): EmIO[EmileError.IO, Boolean] =
+    pathOp(accessResult)((poller, req) =>
+      Zone(LibUV.uv_fs_access(poller.loop, req, toCString(path.toString), FileAccess.mode(mode), fsDeliveryCb))
+    )
+
+  /** Whether `path` exists - the [[access]] existence check. */
+  def exists(path: Path): EmIO[EmileError.IO, Boolean] = access(path, FileAccess.Exists)
+
+  /** Sets the permission bits of `path` to `permissions` (an octal mode) via `chmod`. */
+  def chmod(path: Path, permissions: Int): EmIO[EmileError.IO, Unit] =
+    pathOp(unitResult)((poller, req) => Zone(LibUV.uv_fs_chmod(poller.loop, req, toCString(path.toString), permissions, fsDeliveryCb)))
+
+  /** Sets the owner and group of `path` via `chown`, following a final symbolic link; either id may
+    * be `-1` to leave it unchanged.
+    */
+  def chown(path: Path, uid: Int, gid: Int): EmIO[EmileError.IO, Unit] =
+    pathOp(unitResult)((poller, req) =>
+      Zone(LibUV.uv_fs_chown(poller.loop, req, toCString(path.toString), uid.toUInt, gid.toUInt, fsDeliveryCb))
+    )
+
+  /** Sets the owner and group of `path` itself via `lchown`, not following a final symbolic link. */
+  def lchown(path: Path, uid: Int, gid: Int): EmIO[EmileError.IO, Unit] =
+    pathOp(unitResult)((poller, req) =>
+      Zone(LibUV.uv_fs_lchown(poller.loop, req, toCString(path.toString), uid.toUInt, gid.toUInt, fsDeliveryCb))
+    )
+
+  /** Sets the access and modification times of `path` via `utime`; each [[SetTime]] is set
+    * explicitly, to now, or left unchanged independently.
+    */
+  def setTimes(path: Path, atime: SetTime, mtime: SetTime): EmIO[EmileError.IO, Unit] =
+    pathOp(unitResult)((poller, req) =>
+      Zone(
+        LibUV.uv_fs_utime(poller.loop, req, toCString(path.toString), SetTime.toDouble(atime), SetTime.toDouble(mtime), fsDeliveryCb)
+      )
+    )
+
+  /** Removes the file or symbolic link `path` (`unlink`); a directory fails with
+    * [[EmileError.IO.IsADirectory]] - use [[rmdir]].
+    */
+  def unlink(path: Path): EmIO[EmileError.IO, Unit] =
+    pathOp(unitResult)((poller, req) => Zone(LibUV.uv_fs_unlink(poller.loop, req, toCString(path.toString), fsDeliveryCb)))
+
+  /** Renames `from` to `to` (`rename`), replacing an existing `to` atomically. */
+  def rename(from: Path, to: Path): EmIO[EmileError.IO, Unit] =
+    pathOp(unitResult)((poller, req) =>
+      Zone(LibUV.uv_fs_rename(poller.loop, req, toCString(from.toString), toCString(to.toString), fsDeliveryCb))
+    )
+
+  /** Copies `from` to `to`, overwriting an existing `to` with a plain byte copy. */
+  def copy(from: Path, to: Path): EmIO[EmileError.IO, Unit] = copyWith(from, to, 0)
+
+  /** Copies `from` to `to` per `options` - whether to overwrite, and the [[ReflinkMode]]. On a
+    * mid-copy failure the partial destination is removed, so it briefly exists then vanishes.
+    */
+  def copy(from: Path, to: Path, options: CopyOptions): EmIO[EmileError.IO, Unit] =
+    copyWith(from, to, CopyOptions.flags(options))
+
+  /** Creates a hard link `to` referring to the same inode as `from` (`link`). */
+  def link(from: Path, to: Path): EmIO[EmileError.IO, Unit] =
+    pathOp(unitResult)((poller, req) =>
+      Zone(LibUV.uv_fs_link(poller.loop, req, toCString(from.toString), toCString(to.toString), fsDeliveryCb))
+    )
+
+  /** Creates a symbolic link at `linkPath` pointing to `target` (`symlink`); `target` is stored
+    * verbatim, so a relative target resolves against `linkPath`'s directory.
+    */
+  def symlink(target: Path, linkPath: Path): EmIO[EmileError.IO, Unit] =
+    pathOp(unitResult)((poller, req) =>
+      Zone(LibUV.uv_fs_symlink(poller.loop, req, toCString(target.toString), toCString(linkPath.toString), 0, fsDeliveryCb))
+    )
+
+  /** The target a symbolic link `path` points to, verbatim as stored (`readlink`). */
+  def readlink(path: Path): EmIO[EmileError.IO, Path] =
+    pathOp(pathResult)((poller, req) => Zone(LibUV.uv_fs_readlink(poller.loop, req, toCString(path.toString), fsDeliveryCb)))
+
+  /** Creates directory `path` with permission `0777` (masked by the process umask). */
+  def mkdir(path: Path): EmIO[EmileError.IO, Unit] = mkdir(path, DefaultDirPermissions)
+
+  /** Creates directory `path` with `permissions` (an octal mode, masked by the process umask). */
+  def mkdir(path: Path, permissions: Int): EmIO[EmileError.IO, Unit] =
+    pathOp(unitResult)((poller, req) => Zone(LibUV.uv_fs_mkdir(poller.loop, req, toCString(path.toString), permissions, fsDeliveryCb)))
+
+  /** Removes the empty directory `path` (`rmdir`); a non-empty one fails with
+    * [[EmileError.IO.DirectoryNotEmpty]].
+    */
+  def rmdir(path: Path): EmIO[EmileError.IO, Unit] =
+    pathOp(unitResult)((poller, req) => Zone(LibUV.uv_fs_rmdir(poller.loop, req, toCString(path.toString), fsDeliveryCb)))
+
+  /** Streams the entries of directory `path` - the entry name relative to `path` and its
+    * [[DirEntryKind]] - over `opendir`/`readdir`/`closedir`, one bounded batch at a time, so a
+    * large directory is traversed in constant memory and with backpressure. `.` and `..` are not
+    * emitted.
+    */
+  def list(path: Path): EmStream[EmileError.IO, DirEntry] =
+    Stream
+      .resource(listResource(path))
+      .flatMap(state =>
+        Stream.repeatEval[EmIO.Of[EmileError.IO], Option[List[DirEntry]]](readBatch(state)).unNoneTerminate.flatMap(Stream.emits)
+      )
+
+  /** Creates a uniquely named temporary directory from `template` - a path whose final component
+    * ends in six `X`s, replaced with random characters (`mkdtemp`) - and yields its path. The
+    * directory is not removed on any schedule; deleting it is the caller's, so it survives a
+    * write-temp-then-rename beyond the effect's scope.
+    */
+  def tempDirectory(template: String): EmIO[EmileError.IO, Path] =
+    EffIO.attempt(
+      LibUVPollingSystem.currentPoller.flatMap(poller =>
+        fsRequest(poller, noBuffer)(req => Zone(LibUV.uv_fs_mkdtemp(poller.loop, req, toCString(template), fsDeliveryCb)))(pathAtResult)
+      ),
+      EmileError.IO.Unexpected(_)
+    )
+
+  /** Creates a uniquely named temporary file from `template` (as [[tempDirectory]], via `mkstemp`)
+    * and yields a [[TempFile]] - its path and an [[OpenFile]] on the descriptor. The descriptor is
+    * closed on release; the file itself persists, for the caller to move into place or delete.
+    */
+  def tempFile(template: String): EmResource[EmileError.IO, TempFile] =
+    Resource.make[EffIO.Of[EmileError.IO], TempFile](acquireTempFile(template))(temp => EffIO.liftF(OpenFile.close(temp.file)))
+
+  // FFI for the path operations: request alloc / cleanup null-checks, req->ptr reinterpretation, and
+  // the caller-owned dirents block for the readdir protocol.
+  // scalafix:off DisableSyntax
+
+  private val noBuffer: AnyRef = new Object
+
+  // The permission a one-argument mkdir uses (0777 octal), before the process umask is applied.
+  private inline val DefaultDirPermissions = 0x1ff
+
+  // Number of dirents read per uv_fs_readdir batch - the streaming granularity for FS.list.
+  private inline val ListBatchSize = 64
+
+  // Runs a path operation: acquire the current poller, submit on its loop, and deliver the typed
+  // result. The Zone-allocated path CString need only survive the submit (libuv copies it for async).
+  private def pathOp[A](interpret: Ptr[Byte] => Either[EmileError.IO, A])(submit: (LibUVPoller, Ptr[Byte]) => Int): EmIO[EmileError.IO, A] =
+    EffIO.attempt(
+      LibUVPollingSystem.currentPoller.flatMap(poller => fsRequest(poller, noBuffer)(req => submit(poller, req))(interpret)),
+      EmileError.IO.Unexpected(_)
+    )
+
+  private def copyWith(from: Path, to: Path, flags: Int): EmIO[EmileError.IO, Unit] =
+    pathOp(unitResult)((poller, req) =>
+      Zone(LibUV.uv_fs_copyfile(poller.loop, req, toCString(from.toString), toCString(to.toString), flags, fsDeliveryCb))
+    )
+
+  // Submit an fs op on `poller`'s loop and deliver its typed result. `submit(req)` issues the uv_fs_*
+  // call; `interpret(req)` reads the outcome from the completed request, before the cleanup that frees
+  // it. `keepAlive` is held reachable (via the anchored delivery) until the callback fires.
+  // Cancellation cancels a still-queued op; its callback then delivers UV_ECANCELED and reclaims it.
+  private def fsRequest[A](poller: LibUVPoller, keepAlive: AnyRef)(submit: Ptr[Byte] => Int)(
+    interpret: Ptr[Byte] => Either[EmileError.IO, A]): IO[A] =
+    IO.async[A]: cb =>
+      Routing.onOwner(poller):
+        val req = allocRequest()
+        val rc = submit(req)
+        if rc < 0 then
+          failRequest(req, cb, rc)
+          None
+        else
+          val run: Ptr[Byte] => Unit = r =>
+            val outcome = interpret(r)
+            CallbackBridge.releaseReq(poller, r)
+            cleanupRequest(r)
+            cb(outcome)
+          CallbackBridge.storeReq(poller, req, new FsDelivery(run, keepAlive))
+          Some(Routing.onOwner(poller)(LibUV.uv_cancel(req): Unit))
+
+  // The anchored completion for an fsRequest: its delivery closure and any borrowed buffer, kept
+  // reachable while the request is outstanding.
+  final private class FsDelivery(val run: Ptr[Byte] => Unit, @scala.annotation.unused val keepAlive: AnyRef)
+
+  private val fsDeliveryCb: LibUV.FSCB = (req: Ptr[Byte]) => CallbackBridge.loadReq[FsDelivery](req).run(req)
+
+  private def unitResult(req: Ptr[Byte]): Either[EmileError.IO, Unit] =
+    val result = LibUV.uv_fs_get_result(req).toInt
+    if result < 0 then Left(IOMapping.fromCode(result)) else Right(())
+
+  private def statusResult(req: Ptr[Byte]): Either[EmileError.IO, FileStatus] =
+    val result = LibUV.uv_fs_get_result(req).toInt
+    if result < 0 then Left(IOMapping.fromCode(result)) else Right(FileStatus.fromStat(LibUV.uv_fs_get_statbuf(req)))
+
+  private def statfsResult(req: Ptr[Byte]): Either[EmileError.IO, FileSystemInfo] =
+    val result = LibUV.uv_fs_get_result(req).toInt
+    if result < 0 then Left(IOMapping.fromCode(result))
+    else Right(FileSystemInfo.fromStatfs(LibUV.uv_fs_get_ptr(req).asInstanceOf[Ptr[LibUV.Statfs]]))
+
+  // realpath / readlink deliver a malloc'd string at req->ptr, freed by the cleanup that follows this
+  // read; copy it into an owned Path first.
+  private def pathResult(req: Ptr[Byte]): Either[EmileError.IO, Path] =
+    val result = LibUV.uv_fs_get_result(req).toInt
+    if result < 0 then Left(IOMapping.fromCode(result)) else Right(Path.of(fromCString(LibUV.uv_fs_get_ptr(req))))
+
+  // access answers a question: 0 is yes, and a denied or missing path is a plain "no"; any other code
+  // is a genuine typed failure.
+  private def accessResult(req: Ptr[Byte]): Either[EmileError.IO, Boolean] =
+    val result = LibUV.uv_fs_get_result(req).toInt
+    if result == 0 then Right(true)
+    else if result == ErrorCode.UV_EACCES || result == ErrorCode.UV_ENOENT then Right(false)
+    else Left(IOMapping.fromCode(result))
+
+  // mkdtemp / mkstemp deliver the created path at req->path (always allocated, freed by the following
+  // cleanup); copy it out first. mkstemp additionally returns the fd at req->result (see acquireTempFile).
+  private def pathAtResult(req: Ptr[Byte]): Either[EmileError.IO, Path] =
+    val result = LibUV.uv_fs_get_result(req).toInt
+    if result < 0 then Left(IOMapping.fromCode(result)) else Right(Path.of(fromCString(LibUV.uv_fs_get_path(req))))
+
+  private def acquireTempFile(template: String): EmIO[EmileError.IO, TempFile] =
+    EffIO.attempt(
+      LibUVPollingSystem.currentPoller.flatMap(poller =>
+        fsRequest(poller, noBuffer)(req => Zone(LibUV.uv_fs_mkstemp(poller.loop, req, toCString(template), fsDeliveryCb)))(req =>
+          mkstempResult(poller, req)
+        )
+      ),
+      EmileError.IO.Unexpected(_)
+    )
+
+  // mkstemp: fd at req->result, path at req->path - both read before the cleanup that frees the path.
+  private def mkstempResult(poller: LibUVPoller, req: Ptr[Byte]): Either[EmileError.IO, TempFile] =
+    val result = LibUV.uv_fs_get_result(req).toInt
+    if result < 0 then Left(IOMapping.fromCode(result))
+    else Right(TempFile(Path.of(fromCString(LibUV.uv_fs_get_path(req))), OpenFile.fromDescriptor(poller, result)))
+
+  // The streaming-list state: the loop, the opendir'd uv_dir_t (C-owned, freed by closedir), and the
+  // caller-owned dirents block reused across batches (freed after closedir).
+  final private class DirState(val poller: LibUVPoller, val dir: Ptr[Byte], val dirents: Ptr[LibUV.Dirent])
+
+  private def listResource(path: Path): EmResource[EmileError.IO, DirState] =
+    Resource.make[EffIO.Of[EmileError.IO], DirState](openDir(path))(closeDir)
+
+  private def openDir(path: Path): EmIO[EmileError.IO, DirState] =
+    EffIO.attempt(
+      LibUVPollingSystem.currentPoller.flatMap { poller =>
+        IO(allocDirents()).flatMap { dirents =>
+          fsRequest(poller, noBuffer)(req => Zone(LibUV.uv_fs_opendir(poller.loop, req, toCString(path.toString), fsDeliveryCb)))(
+            openDirResult
+          ).map(dir => new DirState(poller, dir, dirents))
+            // opendir failed: free the dirents block, then re-raise (no dir to close).
+            .onError(_ => IO(stdlib.free(dirents)))
+        }
+      },
+      EmileError.IO.Unexpected(_)
+    )
+
+  // opendir delivers the uv_dir_t at req->ptr, which the cleanup deliberately does NOT free (closedir
+  // does), so it survives past the request.
+  private def openDirResult(req: Ptr[Byte]): Either[EmileError.IO, Ptr[Byte]] =
+    val result = LibUV.uv_fs_get_result(req).toInt
+    if result < 0 then Left(IOMapping.fromCode(result)) else Right(LibUV.uv_fs_get_ptr(req))
+
+  // One readdir batch: point the dir at the reusable dirents block, read up to ListBatchSize entries,
+  // then interpret. result 0 ends the stream; the strdup'd names are copied into owned Strings before
+  // the following cleanup frees them.
+  private def readBatch(state: DirState): EmIO[EmileError.IO, Option[List[DirEntry]]] =
+    EffIO.attempt(
+      fsRequest(state.poller, noBuffer) { req =>
+        val dir = state.dir.asInstanceOf[Ptr[LibUV.Dir]]
+        dir._1 = state.dirents
+        dir._2 = ListBatchSize.toCSize
+        LibUV.uv_fs_readdir(state.poller.loop, req, state.dir, fsDeliveryCb)
+      }(req => readBatchResult(state, req)),
+      EmileError.IO.Unexpected(_)
+    )
+
+  private def readBatchResult(state: DirState, req: Ptr[Byte]): Either[EmileError.IO, Option[List[DirEntry]]] =
+    val result = LibUV.uv_fs_get_result(req).toInt
+    if result < 0 then Left(IOMapping.fromCode(result))
+    else if result == 0 then Right(None)
+    else Right(Some(readEntries(state.dirents, result)))
+
+  private def readEntries(dirents: Ptr[LibUV.Dirent], count: Int): List[DirEntry] =
+    (0 until count).iterator.map { i =>
+      val entry = dirents + i
+      DirEntry(fromCString(entry._1), DirEntry.kindOf(entry._2))
+    }.toList
+
+  private def closeDir(state: DirState): EmIO[EmileError.IO, Unit] =
+    EffIO.liftF(closeDirIO(state).flatMap(_ => IO(stdlib.free(state.dirents))))
+
+  // closedir frees the uv_dir_t; treat any failure as released (nothing left to retry), as file close does.
+  private def closeDirIO(state: DirState): IO[Unit] =
+    IO.async[Unit]: cb =>
+      Routing.onOwner(state.poller):
+        val req = allocRequest()
+        val rc = LibUV.uv_fs_closedir(state.poller.loop, req, state.dir, fsDeliveryCb)
+        if rc < 0 then
+          cleanupRequest(req)
+          cb(Right(()))
+        else
+          val run: Ptr[Byte] => Unit = r =>
+            CallbackBridge.releaseReq(state.poller, r)
+            cleanupRequest(r)
+            cb(Right(()))
+          CallbackBridge.storeReq(state.poller, req, new FsDelivery(run, noBuffer))
+        None
+
+  private def allocDirents(): Ptr[LibUV.Dirent] =
+    val block = stdlib.calloc(ListBatchSize.toCSize, sizeof[LibUV.Dirent])
+    if block == null then throw new OutOfMemoryError("emile: dirent block allocation failed")
+    else block.asInstanceOf[Ptr[LibUV.Dirent]]
+
+  private def allocRequest(): Ptr[Byte] =
+    val req = stdlib.calloc(1.toCSize, LibUV.uv_req_size(LibUV.UV_FS))
+    if req == null then throw new OutOfMemoryError("emile: uv_fs_t allocation failed")
+    else req
+
+  // Synchronous uv_fs_* failure, before storeReq, so there is no anchor to release - just clean up.
+  private def failRequest[A](req: Ptr[Byte], cb: Either[Throwable, A] => Unit, rc: Int): Unit =
+    cleanupRequest(req)
+    cb(Left(IOMapping.fromCode(rc)))
+
+  private def cleanupRequest(req: Ptr[Byte]): Unit =
+    LibUV.uv_fs_req_cleanup(req)
+    stdlib.free(req)
+
+  // scalafix:on DisableSyntax
 
   // The outcome of install, distinguishing the two failure modes by how the handle must be reclaimed: an
   // init failure has already freed the un-init'd handle (uv_close cannot run on it), a start failure

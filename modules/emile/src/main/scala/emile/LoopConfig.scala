@@ -22,7 +22,10 @@ package emile
   *   suppressing sampling-profiler wake-ups; libuv blocks `SIGPROF` only, so this is the whole of
   *   the choice
   * @param useIoUringSqpoll register the loop's io_uring with kernel-side submission-queue polling
-  *   (libuv `UV_LOOP_USE_IO_URING_SQPOLL`)
+  *   (libuv `UV_LOOP_USE_IO_URING_SQPOLL`). Ring-eligible filesystem operations then bypass the
+  *   worker threadpool, where cancellation defeats them: `uv_cancel` returns `UV_EBUSY`, so a
+  *   queued `OpenFile` / `FS` operation on such a loop is not cancellable. Default loops are
+  *   unaffected
   */
 final case class LoopConfig(
   blockProfilerSignal: Boolean,

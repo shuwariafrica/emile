@@ -71,6 +71,24 @@ private[emile] object SockAddr:
       addressOf(v6, ntohs(sa._2))
     else None
 
+  /** Reads just the [[com.comcast.ip4s.IpAddress IpAddress]] from a `sockaddr_in` / `sockaddr_in6`
+    * in `storage`, ignoring the port; `None` for any other address family. For the
+    * interface-address unions, whose port is unused.
+    */
+  def readIp(storage: Ptr[Byte]): Option[IpAddress] =
+    val family = storage.asInstanceOf[Ptr[sockaddr_in]]._1.toInt
+    if family == AF_INET then
+      val sa = storage.asInstanceOf[Ptr[sockaddr_in]]
+      val bytes = new Array[Byte](4)
+      copyFromPtr(sa.at3.asInstanceOf[Ptr[Byte]], bytes)
+      Ipv4Address.fromBytes(bytes)
+    else if family == AF_INET6 then
+      val sa = storage.asInstanceOf[Ptr[sockaddr_in6]]
+      val bytes = new Array[Byte](16)
+      copyFromPtr(sa.at4.asInstanceOf[Ptr[Byte]], bytes)
+      Ipv6Address.fromBytes(bytes)
+    else None
+
   private def writeV4(v4: Ipv4Address, storage: Ptr[Byte], port: CUnsignedShort): Unit =
     val sa = storage.asInstanceOf[Ptr[sockaddr_in]]
     sa._1 = AF_INET.toUShort

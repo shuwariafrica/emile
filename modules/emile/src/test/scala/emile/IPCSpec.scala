@@ -26,11 +26,9 @@ import cats.effect.IO
 import cats.effect.Resource
 import fs2.Chunk
 
-/** Covers [[IPC.bind]] / [[IPC.connect]] / [[StreamServer.accepted]] and the [[IPCSocket]] surface
-  * end-to-end over a Unix-domain round-trip - hermetic (no loopback, no filesystem entry) via the
-  * Linux abstract namespace, plus the filesystem path, address round-trip, peer credentials, and
-  * socket-file chmod.
-  */
+// IPC.bind / IPC.connect / accepted and the IPCSocket surface end-to-end over a Unix-domain
+// round-trip - hermetic via the Linux abstract namespace - plus filesystem-path, address round-trip,
+// peer credentials, socket-file chmod, and the socketpair pair.
 final class IPCSpec extends EmileSuite:
 
   private val nameCounter = new AtomicInteger(0)
@@ -163,6 +161,25 @@ final class IPCSpec extends EmileSuite:
           )
           .absolve
       )
+      .timeout(5.seconds)
+  }
+
+  test("pair exchanges bytes in both directions and closes both ends on release") {
+    IPC.pair
+      .use { pair =>
+        val (a, b) = pair
+        EffIO.liftF(
+          for
+            _ <- a.write(Chunk.array("ping".getBytes("UTF-8"))).absolve
+            atB <- b.read(4).absolve
+            _ <- b.write(Chunk.array("pong".getBytes("UTF-8"))).absolve
+            atA <- a.read(4).absolve
+            _ <- IO(assertEquals(atB.fold(List.empty[Byte])(_.toList), "ping".getBytes("UTF-8").toList))
+            _ <- IO(assertEquals(atA.fold(List.empty[Byte])(_.toList), "pong".getBytes("UTF-8").toList))
+          yield ()
+        )
+      }
+      .absolve
       .timeout(5.seconds)
   }
 

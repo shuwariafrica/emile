@@ -175,6 +175,10 @@ listenBacklog = 128))` applies it before the server listens, so the socket is ne
 `server.chmod` re-sets it on an already-bound server. A mode on an abstract or autobind address (which has no socket
 file) is rejected.
 
+`IPC.pair` yields a connected pair of local stream sockets (`socketpair`) - a full-duplex in-process channel with no
+filesystem entry, for handing one end to a subprocess or splitting work across fibres. Both ends are on the acquiring
+worker's loop and both close on release.
+
 ### Serving connections
 
 `server.serve` runs a complete accept-and-handle loop with graceful shutdown - the piece that is genuinely hard to
@@ -298,17 +302,65 @@ pulse outstanding. The platform also coalesces rapid changes and may omit the en
 the consumer's concern. `FS.poll` is coarser still: it reports only the watched path's own stat transitions (no entry
 name), so polling a directory misses changes within its files.
 
+Beyond watching, `FS` carries the path-scoped filesystem operations, each typed `EmileError.IO` and run on libuv's
+threadpool:
+
+```scala
+FS.stat(path)      // EmIO[..., FileStatus]      - full stat; lstat does not follow a final symlink
+FS.statfs(path)    // EmIO[..., FileSystemInfo]  - capacity of the holding filesystem
+FS.exists(path)    // EmIO[..., Boolean]         - FS.access(path, mode) for a specific FileAccess
+FS.realpath(path)  // EmIO[..., Path]            - canonical absolute path
+FS.list(dir)       // EmStream[..., DirEntry]    - streamed one bounded batch at a time, constant memory
+```
+
+Mutations mirror the shell tools: `chmod`, `chown` / `lchown`, `setTimes` (each timestamp an `At`, `Now`, or `Omit`),
+`unlink`, `rename`, `copy` (with `CopyOptions` for overwrite and reflink), `link` / `symlink` / `readlink`, and
+`mkdir` / `rmdir`. `access` and `exists` answer `false` for a missing or forbidden path rather than raising, so the
+everyday question is not exception-shaped; a create-exclusive collision, a non-empty `rmdir`, and their kin surface as
+the typed `AlreadyExists`, `DirectoryNotEmpty`, `NotADirectory`, and `IsADirectory`.
+
+`FS.tempDirectory(template)` and `FS.tempFile(template)` create from a template whose final component ends in six `X`s.
+Neither is removed on any schedule - deletion is the caller's, so a write-temp-then-rename survives the effect's scope -
+and `tempFile` yields a `TempFile(path, file)` whose `OpenFile` descriptor closes on release while the file itself
+persists.
+
+`FileStatus` is the full `stat` record - `size`, `mode`, ids, and the access, modification, change, and creation times
+as `FileTime` (epoch seconds plus nanoseconds, ordered, no `java.time` dependency) - with `isFile` / `isDirectory` /
+`isSymlink` and a `permissions` accessor.
+
 ### OpenFile
 
 ```scala
+import boilerplate.Slice
+import emile.*
+
+// Read (the file must already exist).
 OpenFile.open(java.nio.file.Path.of("payload.bin")).use: file =>
   file.read(65536)  // EmIO[EmileError.IO, Option[Chunk[Byte]]] - advances the position; None at EOF
   file.reads        // EmStream[EmileError.IO, Byte] - the whole file from the current position
   file.size         // EmIO[EmileError.IO, Long]
+
+// Open with a mode to create, truncate, or append.
+OpenFile.open(path, OpenMode.Write).use: file =>
+  file.write(Slice.of(record))                // EmIO[EmileError.IO, Unit] - at the current position
+  file.write(Slice.of(record), offset = 128L) // positioned, without moving the position
+  file.truncate(0L) *> file.sync              // ftruncate + fsync
 ```
 
-`OpenFile` wraps a read-only `uv_file`; the descriptor closes when the Resource releases, and one open file may serve
-many reads. To send a file to a socket, choose by need:
+`OpenFile` wraps a `uv_file`. `open(path)` is read-only and requires the file to exist; `open(path, mode)` and
+`open(path, mode, permissions)` open per an `OpenMode` - the presets `Read`, `Write` (create then truncate), `Append`
+(create then append), `CreateNew` (create, failing `AlreadyExists` if present), and `ReadWrite` - each an orthogonal set
+of the six `open(2)` behaviours, so no invalid flag combination is expressible. The descriptor closes when the Resource
+releases, and one open file may serve many operations.
+
+`write(slice)` borrows its region until the effect completes, so a reusable write scratch is an owned array framed as a
+`Slice` per fill, its completion sequenced before the next fill (as for a [socket write](#tcp)); a short native write is
+completed internally, so a genuine error - never a partial write - surfaces. A positioned `write(slice, offset)` does not
+move the file position, and under `Append` the offset is ignored and the bytes still land at end of file.
+`stream.through(file.writes)` is the streaming sink - the file-logger shape, appending every chunk. `truncate`, `sync`,
+`datasync`, `stat` (a full `FileStatus`), `chmod`, `chown`, and `setTimes` complete the descriptor-scoped surface.
+
+To send a file to a socket, choose by need:
 
 ```scala
 file.reads.through(socket.writes)  // whole-file body, fully backpressured (uv_write, one copy)
@@ -417,6 +469,29 @@ runtime becomes a zombie until the parent process exits.
 `Process.disableStdioInheritance` sets close-on-exec on every descriptor the process has already inherited, so they do
 not leak into later children. It is best-effort and process-global; call it once at startup, before any emile descriptor
 exists, and rely on creating handed-off descriptors close-on-exec as the load-bearing discipline - never on this sweep.
+
+### Random
+
+```scala
+import boilerplate.Slice
+
+Random.bytes(32)            // EmIO[EmileError.IO, Array[Byte]] - a fresh array of system-CSPRNG bytes
+Random.fill(Slice.of(buf))  // EmIO[EmileError.IO, Unit]        - fill a caller buffer in place
+```
+
+`Random` draws cryptographically strong bytes from the system CSPRNG (`uv_random`, backed by `getrandom`), on libuv's
+threadpool. It is the runtime's general-purpose randomness; where an application also runs a dedicated cryptographic
+library, draw key material, tokens, and protocol identifiers from that library's own generator, so a single audited
+generator owns the security-critical randomness rather than two coexisting on one classpath.
+
+### Net
+
+```scala
+Net.interfaces  // EmIO[EmileError.IO, List[InterfaceAddress]]
+```
+
+`Net.interfaces` enumerates the host's active network interfaces - one `InterfaceAddress` per bound address, carrying the
+ip4s `address` and `netmask`, the hardware address (absent for a loopback), and whether the interface is internal.
 
 ## Timeouts, retries, and limits
 
@@ -653,12 +728,6 @@ emile's musl support is best-effort, pending upstream Scala Native runtime suppo
 landing ([scala-native#4934](https://github.com/scala-native/scala-native/pull/4934)); treat a musl target as
 experimental until a Scala Native release carrying that work ships. Fully-static (`-static`) musl builds are the most
 affected - prefer dynamic linking on musl today. glibc targets are unaffected.
-
-### File writing goes through fs2
-
-`OpenFile` is read-only - emile has no native file-write capability yet. For writing, creating, or truncating files,
-use `fs2.io.file` (the `emile-fs2` module already brings fs2 in). Native file operations are tracked for a future
-release.
 
 ### `connect(host, port)` is serial
 

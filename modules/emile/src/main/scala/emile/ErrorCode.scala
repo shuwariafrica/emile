@@ -91,6 +91,10 @@ object ErrorCode:
   val UV_ENETDOWN: Int = -errno.ENETDOWN
   val UV_EINVAL: Int = -errno.EINVAL
   val UV_ESRCH: Int = -errno.ESRCH
+  val UV_EEXIST: Int = -errno.EEXIST
+  val UV_ENOTEMPTY: Int = -errno.ENOTEMPTY
+  val UV_ENOTDIR: Int = -errno.ENOTDIR
+  val UV_EISDIR: Int = -errno.EISDIR
 
   // libuv pseudo-codes with no errno - fixed on every platform, hence literals.
   inline val UV_EOF = -4095
