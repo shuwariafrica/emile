@@ -8,5 +8,5 @@ object Dependencies:
   val `ip4s-core` = "com.comcast" %% "ip4s-core" % "3.8.0"
   val `boilerplate` = "africa.shuwari" %% "boilerplate" % "0.11.0"
   val `boilerplate-effect` = boilerplate.withName("boilerplate-effect")
-  val `munit` = "org.scalameta" %% "munit" % "1.3.4"
+  val `munit` = "org.scalameta" %% "munit" % "1.3.5"
   val `munit-cats-effect` = "org.typelevel" %% "munit-cats-effect" % "2.2.0"
