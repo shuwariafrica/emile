@@ -5,7 +5,7 @@
 # matrix cells (rawhide, alpine-edge) are one reproducible command for CI and
 # for local use:
 #
-#   DOCKER_IMAGE=shuwariafrica/alpine-jdk:17 EMILE_STATIC_LINK=true \
+#   DOCKER_IMAGE=shuwariafrica/alpine-jdk:21 EMILE_STATIC_LINK=true \
 #     ./project/scripts/run-sbt.sh "emile/testOnly *"
 #
 # SBT_PROPS, when set, is split on whitespace and prepended to the sbt argv
@@ -21,8 +21,10 @@ if [[ -n "${SBT_PROPS:-}" ]]; then
   read -ra extra_args <<< "$SBT_PROPS"
 fi
 
+# --server: sbt-2 builds otherwise delegate to sbtn, whose runner scripts mis-detect musl
+# (OSTYPE "linux-gnu" checks) and hardcode a stale client version; the JVM path boots sbt.version.
 if [[ -z "${DOCKER_IMAGE:-}" ]]; then
-  exec sbt "${extra_args[@]}" "$@"
+  exec sbt --server ${extra_args[@]+"${extra_args[@]}"} "$@"
 fi
 
 mkdir -p "$HOME/.cache/coursier" "$HOME/.cache/sbt"
@@ -47,5 +49,5 @@ done
 # sbt-version resolves the build version via git, and sbt-snx clones libuv with git;
 # safe.directory '*' clears git's dubious-ownership guard on the bind-mounted repo.
 exec docker run "${docker_args[@]}" --entrypoint sh "$DOCKER_IMAGE" -c \
-  'mkdir -p "$HOME" && git config --global --add safe.directory "*" && exec sbt "$@"' \
-  sh "${extra_args[@]}" "$@"
+  'mkdir -p "$HOME" && git config --global --add safe.directory "*" && exec sbt --server "$@"' \
+  sh ${extra_args[@]+"${extra_args[@]}"} "$@"
