@@ -24,9 +24,8 @@ import boilerplate.effect.EffIO
 import cats.effect.IO
 import cats.effect.Resource
 
-/** Covers [[FDPoll]]: one-shot `await` reports a readable descriptor, persistent `awaits` re-arms
-  * across deliveries on one handle, and using a released watcher is a typed error.
-  */
+// Covers [[FDPoll]]: one-shot `await` reports a readable descriptor, persistent `awaits` re-arms
+// across deliveries on one handle, and using a released watcher is a typed error.
 final class FDPollSpec extends EmileSuite:
 
   test("await fires Readable when the pipe becomes readable") {

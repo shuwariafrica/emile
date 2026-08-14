@@ -25,9 +25,8 @@ import com.comcast.ip4s.Ipv4Address
 import com.comcast.ip4s.Port
 import com.comcast.ip4s.SocketAddress
 
-/** Covers [[Socket.proxy]]: a front client's bytes reach a backend and the backend's reply returns,
-  * and a half-close on the front is propagated through to the backend so its echo terminates.
-  */
+// Covers [[Socket.proxy]]: a front client's bytes reach a backend and the backend's reply returns,
+// and a half-close on the front is propagated through to the backend so its echo terminates.
 final class ProxySpec extends EmileSuite:
 
   private val anyLoopback: SocketAddress[IpAddress] =

@@ -29,9 +29,8 @@ import com.comcast.ip4s.Ipv4Address
 import com.comcast.ip4s.Port
 import com.comcast.ip4s.SocketAddress
 
-/** Covers a server streaming a temp file to the peer two ways: [[Socket.sendFile]] (kernel
-  * `uv_fs_sendfile`) and the backpressure-correct `OpenFile.reads.through(socket.writes)`.
-  */
+// Covers a server streaming a temp file to the peer two ways: [[Socket.sendFile]] (kernel
+// `uv_fs_sendfile`) and the backpressure-correct `OpenFile.reads.through(socket.writes)`.
 final class TCPSendFileSpec extends EmileSuite:
 
   private val anyLoopback: SocketAddress[IpAddress] =

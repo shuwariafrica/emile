@@ -21,10 +21,9 @@ import scala.scalanative.posix.signal as posix
 
 import cats.effect.IO
 
-/** Covers [[Signal]]: a watched signal raised against the process is delivered to the subscriber.
-  * `SIGCHLD` is used - its default disposition is to be ignored, so an early raise cannot terminate
-  * the test process.
-  */
+// Covers [[Signal]]: a watched signal raised against the process is delivered to the subscriber.
+// `SIGCHLD` is used - its default disposition is to be ignored, so an early raise cannot terminate
+// the test process.
 final class SignalSpec extends EmileSuite:
 
   test("watch receives a signal raised against the process") {

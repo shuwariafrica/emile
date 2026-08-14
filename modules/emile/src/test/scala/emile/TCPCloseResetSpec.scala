@@ -24,9 +24,8 @@ import com.comcast.ip4s.Ipv4Address
 import com.comcast.ip4s.Port
 import com.comcast.ip4s.SocketAddress
 
-/** Covers [[Socket.closeReset]] - the abortive RST close, from both the closing side (the socket is
-  * closed afterwards) and the peer's side (it observes a reset, not a clean end of stream).
-  */
+// Covers [[Socket.closeReset]] - the abortive RST close, from both the closing side (the socket is
+// closed afterwards) and the peer's side (it observes a reset, not a clean end of stream).
 final class TCPCloseResetSpec extends EmileSuite:
 
   private val anyLoopback: SocketAddress[IpAddress] =

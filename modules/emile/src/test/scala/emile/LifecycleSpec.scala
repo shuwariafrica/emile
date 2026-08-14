@@ -26,10 +26,9 @@ import com.comcast.ip4s.Ipv4Address
 import com.comcast.ip4s.Port
 import com.comcast.ip4s.SocketAddress
 
-/** Covers the socket lifecycle under concurrency and after release: concurrent handlers keep their
-  * sockets valid, use after release is a typed [[EmileError.IO.AlreadyClosed]], and a second
-  * concurrent read fails with [[EmileError.IO.ConflictingOperation]].
-  */
+// Covers the socket lifecycle under concurrency and after release: concurrent handlers keep their
+// sockets valid, use after release is a typed [[EmileError.IO.AlreadyClosed]], and a second
+// concurrent read fails with [[EmileError.IO.ConflictingOperation]].
 final class LifecycleSpec extends EmileSuite:
 
   private val anyLoopback: SocketAddress[IpAddress] =

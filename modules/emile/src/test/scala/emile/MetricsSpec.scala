@@ -26,9 +26,8 @@ import com.comcast.ip4s.Ipv4Address
 import com.comcast.ip4s.Port
 import com.comcast.ip4s.SocketAddress
 
-/** Guards that a [[LibUVPoller]]'s I/O operations reach cats-effect's `PollerMetrics`, so emile I/O
-  * is visible in `IORuntimeMetrics` rather than reading as all-zero.
-  */
+// Guards that a [[LibUVPoller]]'s I/O operations reach cats-effect's `PollerMetrics`, so emile I/O
+// is visible in `IORuntimeMetrics` rather than reading as all-zero.
 final class MetricsSpec extends EmileSuite:
 
   private val anyLoopback: SocketAddress[IpAddress] =

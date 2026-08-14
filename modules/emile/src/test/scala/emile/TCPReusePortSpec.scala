@@ -23,7 +23,7 @@ import com.comcast.ip4s.Ipv4Address
 import com.comcast.ip4s.Port
 import com.comcast.ip4s.SocketAddress
 
-/** Covers [[TCPOptions.reusePort]] (`SO_REUSEPORT`): two binders share the same address. */
+// Covers [[TCPOptions.reusePort]] (`SO_REUSEPORT`): two binders share the same address.
 final class TCPReusePortSpec extends EmileSuite:
 
   private val anyLoopback: SocketAddress[IpAddress] =

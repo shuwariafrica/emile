@@ -29,7 +29,7 @@ import cats.effect.IO
 import cats.effect.Resource
 import fs2.Chunk
 
-/** Covers [[OpenFile]]: size, single reads to end of file, and the whole-file `reads` stream. */
+// Covers [[OpenFile]]: size, single reads to end of file, and the whole-file `reads` stream.
 final class OpenFileSpec extends EmileSuite:
 
   test("size reports the file's byte count") {

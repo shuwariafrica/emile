@@ -21,9 +21,8 @@ import boilerplate.effect.EffIO
 import cats.effect.IO
 import com.comcast.ip4s.*
 
-/** Guards the cancellation and cleanup paths on the TCP surface: a cancelable connect bounded by
-  * `timeout`, accept cancellation, and server release while a connection arrives.
-  */
+// Guards the cancellation and cleanup paths on the TCP surface: a cancelable connect bounded by
+// `timeout`, accept cancellation, and server release while a connection arrives.
 final class CancellationCleanupSpec extends EmileSuite:
 
   private val anyLoopback: SocketAddress[IpAddress] =

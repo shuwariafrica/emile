@@ -19,9 +19,8 @@ import cats.syntax.all.*
 
 import emile.LibUVPollingSystem
 
-/** Covers the `Routing.onOwner` affinity invariant: a routed thunk always runs on its loop's owner
-  * thread, even under heavy concurrent scheduling.
-  */
+// Covers the `Routing.onOwner` affinity invariant: a routed thunk always runs on its loop's owner
+// thread, even under heavy concurrent scheduling.
 final class AffinitySpec extends StressSuite:
 
   // Large enough that the minimum auto-cede thresholds fire repeatedly and worker local queues stay

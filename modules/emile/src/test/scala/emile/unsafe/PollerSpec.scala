@@ -21,9 +21,8 @@ import cats.effect.unsafe.PollResult
 
 import emile.LoopConfig
 
-/** Covers [[LibUVPoller]]: construction, the timeout modes of `poll`, cross-thread submission and
-  * interruption, and clean shutdown.
-  */
+// Covers [[LibUVPoller]]: construction, the timeout modes of `poll`, cross-thread submission and
+// interruption, and clean shutdown.
 final class PollerSpec extends munit.FunSuite:
 
   test("a fresh poller polls non-blocking and reports Complete") {

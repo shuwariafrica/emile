@@ -20,10 +20,9 @@ import scala.concurrent.duration.*
 import boilerplate.effect.EffIO
 import cats.effect.IO
 
-/** Covers [[AsyncSignal]]: a fire surfaces on the fires stream, rapid fires coalesce to a single
-  * pending wake-up, and a second concurrent consumer fails with
-  * [[EmileError.IO.ConflictingOperation]].
-  */
+// Covers [[AsyncSignal]]: a fire surfaces on the fires stream, rapid fires coalesce to a single
+// pending wake-up, and a second concurrent consumer fails with
+// [[EmileError.IO.ConflictingOperation]].
 final class AsyncSignalSpec extends EmileSuite:
 
   test("fire delivers a wake-up to fires") {
