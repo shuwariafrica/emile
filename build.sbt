@@ -2,14 +2,14 @@ scalaVersion := "3.8.4"
 organization := "africa.shuwari"
 description := "Scala Native async I/O library backed by libuv."
 startYear := Some(2025)
-homepage := Some(url("https://github.com/shuwariafrica/emile"))
-licenses := List("Apache-2.0" -> url("https://www.apache.org/licenses/LICENSE-2.0.txt"))
+homepage := Some(uri("https://github.com/shuwariafrica/emile"))
+licenses := List("Apache-2.0" -> uri("https://www.apache.org/licenses/LICENSE-2.0.txt"))
 semanticdbEnabled := true
 scalafmtDetailedError := true
 scalafmtPrintDiff := true
 scmInfo := Some(
   ScmInfo(
-    url("https://github.com/shuwariafrica/emile"),
+    uri("https://github.com/shuwariafrica/emile"),
     "scm:git:https://github.com/shuwariafrica/emile.git",
     Some("scm:git:git@github.com:shuwariafrica/emile.git")
   )
