@@ -17,7 +17,7 @@ package emile
 
 import scala.concurrent.duration.*
 
-/** Covers [[Timer]]: a delay completes, and an interval emits once per period. */
+// Covers [[Timer]]: a delay completes, and an interval emits once per period.
 final class TimerSpec extends EmileSuite:
 
   test("after completes") {

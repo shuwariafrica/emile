@@ -26,10 +26,9 @@ import scala.scalanative.unsafe.CInt
 
 import cats.effect.IO
 
-/** Covers the signal supervisor: a single delivery reaches every concurrent watcher (`SIGURG`,
-  * whose default disposition is to be ignored), and the prior disposition is restored when the last
-  * subscriber for a signal unsubscribes (`SIGUSR1`).
-  */
+// Covers the signal supervisor: a single delivery reaches every concurrent watcher (`SIGURG`,
+// whose default disposition is to be ignored), and the prior disposition is restored when the last
+// subscriber for a signal unsubscribes (`SIGUSR1`).
 final class SignalSupervisorSpec extends EmileSuite:
 
   test("a raised signal reaches every concurrent watcher") {

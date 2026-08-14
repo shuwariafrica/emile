@@ -218,6 +218,74 @@ spliced to an `IPC` backend.
 Socket.proxy(frontConnection, backendConnection): EmIO[EmileError.IO, Unit]
 ```
 
+### Per-worker listeners
+
+`TCP.bindPerWorker` binds one listener on every worker loop, all sharing a single port through
+`SO_REUSEPORT`, so the kernel distributes incoming connections across all the cores in one process - the
+multi-core accept scaling a single listener cannot give. It yields a `TCPServerPool` whose surface mirrors a
+single server's.
+
+```scala
+import cats.effect.{Deferred, IO}
+import com.comcast.ip4s.*
+import emile.*
+
+Deferred[IO, Unit].flatMap: shutdown =>
+  TCP.bindPerWorker(SocketAddress(ipv4"0.0.0.0", port"8080")).use: pool =>
+    val echo = (socket: TCPSocket) => socket.reads.through(socket.writes).compile.drain
+    // maxConcurrent bounds handlers GLOBALLY across every listener, not per listener.
+    pool.serve(4096, shutdown.get)(echo)(err => IO.println(s"connection failed: $err"))
+```
+
+`pool.accepted` merges every listener's accept stream; `pool.serve` runs the same graceful accept loop as a
+single server's [serve](#serving-connections) but bounds handlers globally across all listeners; and
+`pool.addresses` / `pool.size` report the shared address per listener and the replication factor (the worker
+count). Each accepted socket is pinned to the loop that accepted it, so its operations route to the right loop
+with no cross-loop hop.
+
+`SO_REUSEPORT` is structural to this surface: it is applied to every listener regardless of
+`TCPOptions.reusePort`, which is not consulted here (on `TCP.bind` that flag keeps its single-bind,
+cross-process meaning). Acquisition is all-or-nothing - every listener binds and listens during acquire, and
+any failure releases those already bound and surfaces a typed `EmileError.Bind`, including the `UV_ENOTSUP` a
+platform without `SO_REUSEPORT` returns. The kernel's distribution is even only asymptotically - skewed at low
+connection counts - which the global `serve` limit, not any assumption of balanced per-listener load, absorbs.
+Releasing the pool closes every listener; connections already queued in a listener's kernel accept queue but
+not yet accepted are reset, not redistributed, so stop directing traffic to the port before release where that
+matters.
+
+### UDP
+
+emile offers two UDP surfaces. Pick the baseline for portable datagram work; pick the channel when a
+QUIC-class transport needs per-packet ECN, GSO/GRO, and PMTUD control that libuv's `uv_udp` does not
+expose.
+
+`UDP.bind(address)` (or `bind(address, options)`) yields an `EmResource[EmileError.Bind, UDPSocket]`.
+`UDPOptions(reusePort, ipv6Only, batchedReceive)` has `default` and `highThroughput` presets. Receive
+via the `receive` stream of `Datagram(peer, payload)` (consumer lag pauses libuv and the kernel drops -
+UDP has no flow control) or the zero-copy `consume` (borrowed `Slice` per datagram on the loop thread;
+an empty datagram delivers an empty payload with its peer). Send with `send(payload, to)` (or the
+address-free form on a connected socket); `trySend` is best-effort (`false` on EAGAIN, including a
+pending async send); the batched `trySend(datagrams)` sends one `sendmmsg` batch, returning the count
+accepted. `connect`/`disconnect`, `peerAddress`, `localAddress`, and the `join`/`leave`/`joinSource` +
+`setMulticast*`/`setBroadcast`/`setTtl` family complete the surface.
+
+`UDP.channel(address, config)` yields a `UDPChannel` - a Linux raw-fd datagram channel integrated via
+poll readiness. `ChannelConfig(reusePort, pktinfo, gro, pmtud)` has `default` and `quic` presets; ECN
+reception is always on. `consume` delivers borrowed `Inbound(payload, peer, ecn, local)` per datagram
+(GRO-coalesced buffers are split back into per-segment datagrams, zero-copy); `receive` is the copy-out
+stream. `capabilities` reports runtime-probed GSO/GRO support and the measured segment cap. Send with
+`sendBatch(batch)` (count accepted; re-drive the remainder) or `sendAll`; `Outbound(payload, to, ecn,
+source, gsoSegment)` marks ECN per packet, selects a source address, and segments via GSO. An oversized
+send under `PmtudMode.Do` fails with `EmileError.IO.MessageTooLarge`; `setPmtud` switches the DF/PMTU
+policy (`Dont | Want | Do | Probe`); `pathMtu` reads the path MTU on a connected channel (`connect`/
+`disconnect`/`peerAddress` manage the peer) and is a typed error on an unconnected one.
+
+### Memory
+
+`Memory.total`/`free` report physical RAM (0 when unknown), `available` the free memory under any
+process limit, and `constrained` the process's byte budget or `None` when unconstrained. Size buffers
+and pools against these rather than an assumption. Each is an infallible read.
+
 ### Timer
 
 `Timer.after(delay)` is a cancelable `IO.sleep` driven by cats-effect's per-worker `TimerHeap`; `LibUVPollingSystem`

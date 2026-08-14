@@ -23,10 +23,9 @@ import cats.effect.IO
 import emile.EmileSuite
 import emile.LibUVPollingSystem
 
-/** Covers [[LiveHandle]]: the guard runs the thunk while the handle is live, short-circuits to the
-  * closed value once [[LiveHandle.closeOnOwner]] has freed it, and treats a repeated close as a
-  * no-op.
-  */
+// Covers [[LiveHandle]]: the guard runs the thunk while the handle is live, short-circuits to the
+// closed value once [[LiveHandle.closeOnOwner]] has freed it, and treats a repeated close as a
+// no-op.
 final class LiveHandleSpec extends EmileSuite:
 
   test("tryUse runs the thunk while the handle is live and yields its result") {

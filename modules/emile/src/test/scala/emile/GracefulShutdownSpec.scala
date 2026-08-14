@@ -26,10 +26,9 @@ import com.comcast.ip4s.Ipv4Address
 import com.comcast.ip4s.Port
 import com.comcast.ip4s.SocketAddress
 
-/** Covers [[StreamServer.serve]]'s graceful-shutdown contract: once shutdown is requested the
-  * server stops accepting, and an in-flight handler runs to completion (it drains, it is not
-  * cancelled) before `serve` returns.
-  */
+// Covers [[StreamServer.serve]]'s graceful-shutdown contract: once shutdown is requested the
+// server stops accepting, and an in-flight handler runs to completion (it drains, it is not
+// cancelled) before `serve` returns.
 final class GracefulShutdownSpec extends EmileSuite:
 
   private val anyLoopback: SocketAddress[IpAddress] =

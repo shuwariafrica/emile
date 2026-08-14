@@ -21,10 +21,9 @@ import cats.syntax.all.*
 import emile.EmileSuite
 import emile.LibUVPollingSystem
 
-/** Covers [[Routing.onOwner]]: a thunk routed to a live poller runs and returns its value, many
-  * concurrent routings all complete, a cancelled routing completes without deadlock, and a worker
-  * retired by a blocking region loses its owner claim so routing falls back to the submit path.
-  */
+// Covers [[Routing.onOwner]]: a thunk routed to a live poller runs and returns its value, many
+// concurrent routings all complete, a cancelled routing completes without deadlock, and a worker
+// retired by a blocking region loses its owner claim so routing falls back to the submit path.
 final class RoutingSpec extends EmileSuite:
 
   test("onOwner runs the thunk on the owning loop and returns its value") {

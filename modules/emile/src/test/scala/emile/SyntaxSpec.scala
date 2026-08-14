@@ -18,11 +18,10 @@ package emile
 import boilerplate.effect.EffIO
 import fs2.Stream
 
-/** Covers the error-channel widening helpers in `syntax`: an [[EmStream]] widens cast-free through
-  * `widenS`, an [[EmPipe]] widens by phantom reinterpretation through `widen`, and both preserve
-  * the success and typed-error values they carry. The `EmIO.Of` partial application is exercised as
-  * the stream effect throughout.
-  */
+// Covers the error-channel widening helpers in `syntax`: an [[EmStream]] widens cast-free through
+// `widenS`, an [[EmPipe]] widens by phantom reinterpretation through `widen`, and both preserve
+// the success and typed-error values they carry. The `EmIO.Of` partial application is exercised as
+// the stream effect throughout.
 final class SyntaxSpec extends EmileSuite:
 
   test("widenS widens an EmStream's error channel, preserving values and a typed error") {

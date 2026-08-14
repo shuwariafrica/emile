@@ -19,19 +19,17 @@ import cats.effect.unsafe.IORuntime
 
 import munit.CatsEffectSuite
 
-/** Base suite for emile's cats-effect tests: every test runs on one shared libuv-backed
-  * `IORuntime`. The runtime itself is held by [[EmileSuite$ EmileSuite]].
-  */
+// Base suite for emile's cats-effect tests: every test runs on one shared libuv-backed
+// `IORuntime`. The runtime itself is held by EmileSuite.
 abstract class EmileSuite extends CatsEffectSuite:
   implicit override lazy val munitIORuntime: IORuntime = EmileSuite.SharedRuntime
 
-/** Holds the process-shared libuv [[cats.effect.unsafe.IORuntime IORuntime]] for [[EmileSuite]]. */
+// Holds the process-shared libuv IORuntime for EmileSuite.
 @scala.annotation.internal.sharable
 object EmileSuite:
 
-  /** One libuv `IORuntime` shared across every [[EmileSuite]]; a shutdown hook releases it when the
-    * test binary exits.
-    */
+  // One libuv `IORuntime` shared across every EmileSuite; a shutdown hook releases it when the
+  // test binary exits.
   lazy val SharedRuntime: IORuntime =
     val rt = Emile.unsafeRuntime(LoopConfig.default)
     java.lang.Runtime.getRuntime.addShutdownHook(new Thread(() => rt.shutdown(), "emile-test-shutdown"))

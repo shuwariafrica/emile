@@ -24,7 +24,7 @@ import com.comcast.ip4s.Ipv4Address
 import com.comcast.ip4s.Port
 import com.comcast.ip4s.SocketAddress
 
-/** Covers [[Socket.setKeepAlive]] - the keep-alive value guard, applied on a live connected socket. */
+// Covers [[Socket.setKeepAlive]] - the keep-alive value guard, applied on a live connected socket.
 final class TCPKeepAliveSpec extends EmileSuite:
 
   private val anyLoopback: SocketAddress[IpAddress] =

@@ -24,10 +24,9 @@ import boilerplate.effect.EffIO
 import cats.effect.IO
 import cats.effect.Resource
 
-/** Covers [[FS]]: a real change to a watched path surfaces on `events` and as a coalesced `changes`
-  * pulse, [[FS$ FS]].poll detects a change by stat-polling, a watch of a missing path fails with a
-  * typed error, and a second concurrent consumer fails with [[EmileError.IO.ConflictingOperation]].
-  */
+// Covers [[FS]]: a real change to a watched path surfaces on `events` and as a coalesced `changes`
+// pulse, [[FS$ FS]].poll detects a change by stat-polling, a watch of a missing path fails with a
+// typed error, and a second concurrent consumer fails with [[EmileError.IO.ConflictingOperation]].
 final class FSWatchSpec extends EmileSuite:
 
   test("watch reports a change to the watched file") {

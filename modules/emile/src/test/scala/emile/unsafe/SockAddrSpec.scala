@@ -21,11 +21,10 @@ import com.comcast.ip4s.*
 
 import munit.FunSuite
 
-/** Covers [[SockAddr]]'s IPv6 zone round-trip: a link-local address keeps its interface-name zone
-  * through a write/read cycle (the zone travels as the numeric interface index in `sin6_scope_id`),
-  * an address without a zone gains none, and IPv4 is unaffected. Grounded on the `lo` loopback
-  * interface, always present.
-  */
+// Covers [[SockAddr]]'s IPv6 zone round-trip: a link-local address keeps its interface-name zone
+// through a write/read cycle (the zone travels as the numeric interface index in `sin6_scope_id`),
+// an address without a zone gains none, and IPv4 is unaffected. Grounded on the `lo` loopback
+// interface, always present.
 final class SockAddrSpec extends FunSuite:
 
   private def roundTrip(address: SocketAddress[IpAddress]): Option[SocketAddress[IpAddress]] =

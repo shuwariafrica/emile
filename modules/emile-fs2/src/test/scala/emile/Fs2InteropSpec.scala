@@ -28,10 +28,9 @@ import com.comcast.ip4s.SocketAddress
 
 import emile.Fs2Interop.*
 
-/** Covers [[Fs2Interop.asFs2]] and [[Fs2Interop.acceptFs2]]: an emile [[TCPSocket]] / [[TCPServer]]
-  * adapts to `fs2.io.net.Socket[IO]` / `Stream[IO, Socket[IO]]` and round-trips a payload through
-  * fs2's typed-`IO` API on both sides.
-  */
+// Covers [[Fs2Interop.asFs2]] and [[Fs2Interop.acceptFs2]]: an emile [[TCPSocket]] / [[TCPServer]]
+// adapts to `fs2.io.net.Socket[IO]` / `Stream[IO, Socket[IO]]` and round-trips a payload through
+// fs2's typed-`IO` API on both sides.
 final class Fs2InteropSpec extends Fs2EmileSuite:
 
   private val anyLoopback: SocketAddress[IpAddress] =

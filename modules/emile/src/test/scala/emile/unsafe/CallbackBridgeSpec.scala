@@ -21,10 +21,9 @@ import scala.scalanative.unsigned.*
 
 import emile.LoopConfig
 
-/** Covers [[CallbackBridge]]: a holder stored in a libuv handle's data slot round-trips through
-  * `load`, a later `store` overwrites it, and the per-poller anchor map keeps the holder
-  * GC-reachable (verified indirectly by the `clear` removing the entry).
-  */
+// Covers [[CallbackBridge]]: a holder stored in a libuv handle's data slot round-trips through
+// `load`, a later `store` overwrites it, and the per-poller anchor map keeps the holder
+// GC-reachable (verified indirectly by the `clear` removing the entry).
 final class CallbackBridgeSpec extends munit.FunSuite:
 
   // A handle-sized zeroed buffer; uv_handle_set_data / uv_handle_get_data touch only the data slot.

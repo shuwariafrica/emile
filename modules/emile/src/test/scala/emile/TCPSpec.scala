@@ -25,9 +25,8 @@ import com.comcast.ip4s.Ipv4Address
 import com.comcast.ip4s.Port
 import com.comcast.ip4s.SocketAddress
 
-/** Covers [[TCP.bind]] / [[TCP.connect]] / [[StreamServer.accepted]] and the read / write socket
-  * surface end-to-end over a loopback round-trip.
-  */
+// Covers [[TCP.bind]] / [[TCP.connect]] / [[StreamServer.accepted]] and the read / write socket
+// surface end-to-end over a loopback round-trip.
 final class TCPSpec extends EmileSuite:
 
   private val anyLoopback: SocketAddress[IpAddress] =

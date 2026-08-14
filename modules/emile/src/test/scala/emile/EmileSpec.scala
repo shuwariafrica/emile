@@ -18,9 +18,8 @@ package emile
 import boilerplate.effect.EffIO
 import cats.effect.IO
 
-/** Covers [[Emile.runtime]] and the standalone [[Emile.runEff]] runner: the resource builds a fresh
-  * libuv `IORuntime` and shuts it down on release, and `runEff` returns the effect's typed result.
-  */
+// Covers [[Emile.runtime]] and the standalone [[Emile.runEff]] runner: the resource builds a fresh
+// libuv `IORuntime` and shuts it down on release, and `runEff` returns the effect's typed result.
 final class EmileSpec extends EmileSuite:
 
   test("runtime resource acquires a live libuv IORuntime and releases it") {

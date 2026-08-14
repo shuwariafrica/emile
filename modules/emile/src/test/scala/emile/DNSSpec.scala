@@ -19,9 +19,8 @@ import com.comcast.ip4s.Hostname
 import com.comcast.ip4s.IpAddress
 import com.comcast.ip4s.Port
 
-/** Covers [[DNS]]: forward and reverse resolution of the loopback host, which the platform resolver
-  * answers locally without a network.
-  */
+// Covers [[DNS]]: forward and reverse resolution of the loopback host, which the platform resolver
+// answers locally without a network.
 final class DNSSpec extends EmileSuite:
 
   private val localhost: Hostname = Hostname.fromString("localhost").get
