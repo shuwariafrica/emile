@@ -1,85 +1,86 @@
-name: CI
+name: ci
 
 on:
   workflow_dispatch:
   pull_request:
-    branches: [main]
+    branches: [ main ]
   push:
-    branches: [main]
-    tags: ['v*']
+    branches: [ main ]
+    tags: [ 'v*' ]
 
 permissions:
   contents: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
 
 env:
+  JDK_RELEASE: 21
   SBT_OPTS: >-
-    -Xmx10G
-    -Xms6G
+    -Xmx7G
+    -Xms4G
     -Xss4M
     -XX:ReservedCodeCacheSize=512M
 
 jobs:
   test_native:
-    name: "[${{ matrix.family }}-${{ matrix.arch }}${{ matrix.runtime }}] Tests (${{ matrix.link }} Linked)"
+    name: "${{ matrix.family }} / ${{ matrix.arch }} / ${{ matrix.runtime }} / tests / ${{ matrix.link }}"
     strategy:
       fail-fast: false
       matrix:
         include:
           # glibc on Oracle Linux 10 - the RHEL 10 libuv 1.51.x floor.
-          - link: Dynamic
+          - link: dynamic
             family: linux
             arch: x86_64
             runtime: "-glibc"
             runner: ubuntu-24.04
-            dockerImage: shuwariafrica/el10-jdk:17
-          - link: Dynamic
+            dockerImage: shuwariafrica/el10-jdk:${{ env.JDK_RELEASE }}
+          - link: dynamic
             family: linux
             arch: aarch64
             runtime: "-glibc"
             runner: ubuntu-24.04-arm
-            dockerImage: shuwariafrica/el10-jdk:17
+            dockerImage: shuwariafrica/el10-jdk:${{ env.JDK_RELEASE }}
           # musl on Alpine 3.23 (release track, libuv 1.51.x, ships libuv-static for the static link).
           # These fail until scala-native PR #4934 (sigaltstack/SIGSTKSZ fix for musl) merges and a SN
           # release ships. The dynamic-musl cells stay as non-blocking coverage; the static-musl cells are
           # disabled entirely - the static link fails hard on the same defect and only adds red noise.
           # On the SN release: uncomment both static cells and drop `continueOnError` from all four.
-          - link: Dynamic
+          - link: dynamic
             family: linux
             arch: x86_64
             runtime: "-musl"
             runner: ubuntu-24.04
-            dockerImage: shuwariafrica/alpine-jdk:17
+            dockerImage: shuwariafrica/alpine-jdk:${{ env.JDK_RELEASE }}
             continueOnError: true
-          - link: Dynamic
+          - link: dynamic
             family: linux
             arch: aarch64
             runtime: "-musl"
             runner: ubuntu-24.04-arm
-            dockerImage: shuwariafrica/alpine-jdk:17
+            dockerImage: shuwariafrica/alpine-jdk:${{ env.JDK_RELEASE }}
             continueOnError: true
-          # - link: Static
+          # - link: static
           #   family: linux
           #   arch: x86_64
           #   runtime: "-musl"
           #   runner: ubuntu-24.04
-          #   dockerImage: shuwariafrica/alpine-jdk:17
+          #   dockerImage: shuwariafrica/alpine-jdk:${{ env.JDK_RELEASE }}
           #   continueOnError: true
-          # - link: Static
+          # - link: static
           #   family: linux
           #   arch: aarch64
           #   runtime: "-musl"
           #   runner: ubuntu-24.04-arm
-          #   dockerImage: shuwariafrica/alpine-jdk:17
+          #   dockerImage: shuwariafrica/alpine-jdk:${{ env.JDK_RELEASE }}
           #   continueOnError: true
     runs-on: ${{ matrix.runner }}
     continue-on-error: ${{ matrix.continueOnError == true }}
     env:
       DOCKER_IMAGE: ${{ matrix.dockerImage }}
-      EMILE_STATIC_LINK: ${{ matrix.link == 'Static' && 'true' || 'false' }}
+      EMILE_STATIC_LINK: ${{ matrix.link == 'static' && 'true' || 'false' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -87,10 +88,10 @@ jobs:
           fetch-depth: 0
       - name: Set up Coursier cache
         uses: coursier/cache-action@v8
-      - name: "[host] Run tests"
+      - name: Run tests
         run: timeout -k 30s 20m ./project/scripts/run-sbt.sh -batch "emile/testOnly *" "emile-fs2/testOnly *"
-      - name: "[host] Static-linkage assertion"
-        if: matrix.link == 'Static'
+      - name: Static-linkage assertion
+        if: matrix.link == 'static'
         run: |
           emile_bin=$(find target/out -type f -name 'emile-test' -print -quit)
           fs2_bin=$(find target/out -type f -name 'emile-fs2-test' -print -quit)
@@ -107,9 +108,9 @@ jobs:
           done
 
   static-analysis:
-    name: Static analysis
+    name: analyse
     runs-on: ubuntu-24.04
-    container: shuwariafrica/el10-jdk:17
+    container: shuwariafrica/el10-jdk:${{ env.JDK_RELEASE }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -142,10 +143,10 @@ jobs:
           fi
 
   stress:
-    name: "Concurrency invariants"
+    name: concurrency
     runs-on: ubuntu-24.04
     env:
-      DOCKER_IMAGE: shuwariafrica/el10-jdk:17
+      DOCKER_IMAGE: shuwariafrica/el10-jdk:${{ env.JDK_RELEASE }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -157,11 +158,11 @@ jobs:
         run: timeout -k 30s 25m ./project/scripts/run-sbt.sh -batch "emile-stress/testOnly *"
 
   publish:
-    name: Publish
-    needs: [test_native, static-analysis, stress]
+    name: "publish / artefacts"
+    needs: [ test_native, static-analysis, stress ]
     if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main')
     runs-on: ubuntu-24.04
-    container: shuwariafrica/el10-jdk:17
+    container: shuwariafrica/el10-jdk:${{ env.JDK_RELEASE }}
     permissions:
       contents: read
     steps:
@@ -188,7 +189,7 @@ jobs:
           SONATYPE_PASSWORD: ${{ secrets.OSS_PUBLISH_USER_PASSPHRASE }}
 
   release:
-    name: GitHub Release
+    name: "publish / release"
     needs: publish
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
@@ -218,10 +219,10 @@ jobs:
             $prerelease_flag
 
   dependency-graph:
-    name: Update Dependency Graph
+    name: "report / dependency-graph"
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    container: shuwariafrica/el10-jdk:17
+    container: shuwariafrica/el10-jdk:${{ env.JDK_RELEASE }}
     timeout-minutes: 20
     permissions:
       contents: write
