@@ -33,13 +33,13 @@ jobs:
           - link: dynamic
             family: linux
             arch: x86_64
-            runtime: "-glibc"
+            runtime: "glibc"
             runner: ubuntu-24.04
             dockerImage: shuwariafrica/el10-jdk:21
           - link: dynamic
             family: linux
             arch: aarch64
-            runtime: "-glibc"
+            runtime: "glibc"
             runner: ubuntu-24.04-arm
             dockerImage: shuwariafrica/el10-jdk:21
           # musl on Alpine 3.23 (release track, libuv 1.51.x, ships libuv-static for the static link).
@@ -50,28 +50,28 @@ jobs:
           - link: dynamic
             family: linux
             arch: x86_64
-            runtime: "-musl"
+            runtime: "musl"
             runner: ubuntu-24.04
             dockerImage: shuwariafrica/alpine-jdk:21
             continueOnError: true
           - link: dynamic
             family: linux
             arch: aarch64
-            runtime: "-musl"
+            runtime: "musl"
             runner: ubuntu-24.04-arm
             dockerImage: shuwariafrica/alpine-jdk:21
             continueOnError: true
           # - link: static
           #   family: linux
           #   arch: x86_64
-          #   runtime: "-musl"
+          #   runtime: "musl"
           #   runner: ubuntu-24.04
           #   dockerImage: shuwariafrica/alpine-jdk:21
           #   continueOnError: true
           # - link: static
           #   family: linux
           #   arch: aarch64
-          #   runtime: "-musl"
+          #   runtime: "musl"
           #   runner: ubuntu-24.04-arm
           #   dockerImage: shuwariafrica/alpine-jdk:21
           #   continueOnError: true
