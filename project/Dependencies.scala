@@ -1,7 +1,7 @@
 import sbt.*
 
 object Dependencies:
-  val `cats-effect` = "org.typelevel" %% "cats-effect" % "3.7.0"
+  val `cats-effect` = "org.typelevel" %% "cats-effect" % "3.7.1"
   val `cats-core` = "org.typelevel" %% "cats-core" % "2.13.0"
   val `fs2-core` = "co.fs2" %% "fs2-core" % "3.13.0"
   val `fs2-io` = `fs2-core`.withName("fs2-io")
