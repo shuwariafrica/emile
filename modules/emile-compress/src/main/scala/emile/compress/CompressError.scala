@@ -41,7 +41,7 @@ sealed abstract class CompressError(message: String, cause: Option[Throwable])
 object CompressError:
 
   // Payload-free cases use the class-plus-case-object shape: a union arm named by a bare singleton
-  // type mis-erases on Scala 3.8.4, so type positions must name a class.
+  // type mis-erases on Scala 3.9.0, so type positions must name a class.
 
   /** A corrupt, incomplete-per-format, or unsupported compressed stream; `detail` carries the
     * codec's own error text.
