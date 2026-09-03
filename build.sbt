@@ -1,4 +1,4 @@
-scalaVersion := "3.8.4"
+scalaVersion := "3.9.0"
 organization := "africa.shuwari"
 description := "Scala Native async I/O library backed by libuv."
 startYear := Some(2025)
