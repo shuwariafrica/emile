@@ -9,4 +9,4 @@ object Dependencies:
   val `boilerplate` = "africa.shuwari" %% "boilerplate" % "0.11.0"
   val `boilerplate-effect` = boilerplate.withName("boilerplate-effect")
   val `munit` = "org.scalameta" %% "munit" % "1.3.6"
-  val `munit-cats-effect` = "org.typelevel" %% "munit-cats-effect" % "2.2.0"
+  val `munit-cats-effect` = "org.typelevel" %% "munit-cats-effect" % "2.2.1"
