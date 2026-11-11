@@ -159,8 +159,7 @@ def commonSettings: Seq[Setting[?]] = Seq(
     val years = if start == current then s"$current" else s"$start, $current"
     Some(HeaderLicense.ALv2(years, "Ali Rashid"))
   },
-  headerEmptyLine := false,
-  libraryDependencySchemes += "org.scala-native" % "test-interface_native0.5_3" % "always"
+  headerEmptyLine := false
 )
 
 def nativeSettings: Seq[Setting[?]] = Seq(

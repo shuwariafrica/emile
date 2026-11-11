@@ -31,7 +31,7 @@ object EmileCompressNative:
     )
 
   /** The brotli release emile-compress is verified against. */
-  val brotliTag: String = "v1.2.0"
+  val brotliTag: String = "v1.2.1"
 
   private val brotliRepository: String = "https://github.com/google/brotli.git"
 
