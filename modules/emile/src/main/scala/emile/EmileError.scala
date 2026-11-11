@@ -44,9 +44,9 @@ sealed abstract class EmileError(message: String, cause: Option[Throwable])
 object EmileError:
 
   // Payload-free cases are a sealed abstract class with the case object as its sole inhabitant, so
-  // type positions name a class. A union arm named by a singleton type mis-erases on Scala 3.9.0 -
-  // the TypeTest a typed channel reifies casts its payload to one arm's class, and a value of any
-  // other arm then fails its own test.
+  // type positions name a class. A union arm named by a singleton type mis-erases
+  // (scala/scala3#22950) - the TypeTest a typed channel reifies casts its payload to one arm's
+  // class, and a value of any other arm then fails its own test. The shape goes when that is fixed.
 
   /** Failures from `TCP.bind` and `IPC.bind`. */
   sealed trait Bind extends EmileError

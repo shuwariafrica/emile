@@ -4,7 +4,7 @@ This document covers what you need to build Émile from source, run its tests, a
 
 ## Prerequisites
 
-- **JDK 17 or newer.** CI uses JDK 17; any modern JDK works locally.
+- **JDK 21 or newer.** CI runs JDK 21; any newer JDK works locally.
 - **An sbt launcher** (`sbt` on your `$PATH`). `project/build.properties` pins emile's sbt version; the launcher fetches
   it automatically. No system-wide sbt-2.x install is required.
 - **Native toolchain.** `clang` (16 or newer recommended) and `lld`. Émile is Linux-only.
@@ -35,17 +35,17 @@ sbt "emile-stress/testOnly *"
 
 ```bash
 # glibc (Oracle Linux 10 = the RHEL 10 libuv 1.51 floor):
-DOCKER_IMAGE=shuwariafrica/el10-jdk:17 \
+DOCKER_IMAGE=shuwariafrica/el10-jdk:21 \
   ./project/scripts/run-sbt.sh "emile/testOnly *" "emile-fs2/testOnly *"
 
 # musl, fully-static (EMILE_STATIC_LINK adds -static, linking the image's libuv-static archive):
-DOCKER_IMAGE=shuwariafrica/alpine-jdk:17 EMILE_STATIC_LINK=true \
+DOCKER_IMAGE=shuwariafrica/alpine-jdk:21 EMILE_STATIC_LINK=true \
   ./project/scripts/run-sbt.sh "emile/testOnly *" "emile-fs2/testOnly *"
 ```
 
 `project/scripts/run-sbt.sh` is the host-or-Docker sbt entry point. With `DOCKER_IMAGE` set, it runs sbt inside the
-named image (which ships libuv): the glibc cells use `shuwariafrica/el10-jdk:17` (libuv 1.51) and the musl cells
-`shuwariafrica/alpine-jdk:17` (Alpine 3.23, ships `libuv-static`). `EMILE_STATIC_LINK=true` is honoured only on musl and
+named image (which ships libuv): the glibc cells use `shuwariafrica/el10-jdk:21` (libuv 1.51) and the musl cells
+`shuwariafrica/alpine-jdk:21` (Alpine 3.23, ships `libuv-static`). `EMILE_STATIC_LINK=true` is honoured only on musl and
 is best-effort until upstream Scala Native musl support ships (see the [musl caveat](README.md#caveats)).
 
 ## Style and gates

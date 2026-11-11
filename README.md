@@ -680,9 +680,10 @@ val recovered: EmIO[EmileError.IO, Unit] =
 pass through), and the other typed-error combinators come from `boilerplate.effect`.
 
 Observing a typed channel tests the raised `Throwable` against `E`, so `E` must be testable at run time: a sealed root,
-or a union of classes. Name a case by its class, never by a singleton type - on Scala 3.8.4 a union of singleton types
-(`Rejected.type | Malformed.type`) erases to one arm, and a value of any other arm fails its own test, reaching
-`serve`'s `onError` as an `Unexpected` defect rather than the typed error it is. An `enum` is safe, as is a sealed root
+or a union of classes. Name a case by its class, never by a singleton type - a union of singleton types
+(`Rejected.type | Malformed.type`) erases to one arm ([scala/scala3#22950](https://github.com/scala/scala3/issues/22950)),
+and a value of any other arm fails its own test, reaching `serve`'s `onError` as an `Unexpected` defect rather than the
+typed error it is. An `enum` is safe, as is a sealed root
 whose payload-free cases are `sealed abstract class Rejected private ()` with `case object Rejected extends Rejected` -
 the shape `EmileError` itself uses. Wrapping `serve` in a helper that is generic in `E` means propagating its
 `using TypeTest[Throwable, E]`.
@@ -818,7 +819,7 @@ be worth a hand-off, compose `.offload` around the compressing effect yourself, 
 
 A codec module publishes a bare native-library requirement (`z-ng`, `brotli`, or `zstd`) in its descriptor; its C is
 shipped as source, and your build provisions it once. With **sbt-snx**, vendor it from source at the release tag the
-module is verified against - zlib-ng `2.3.3`, brotli `v1.2.0`, zstd `v1.5.7` - or rebind the name to a matching system
+module is verified against - zlib-ng `2.3.3`, brotli `v1.2.1`, zstd `v1.5.7` - or rebind the name to a matching system
 install:
 
 ```scala
